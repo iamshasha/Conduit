@@ -289,21 +289,37 @@ fn hardware_info_is_plausible() {
 fn launch_rejects_dangerous_targets() {
     let s = start(&[]);
     let c = pair(&s, "https://a.example");
-    assert_eq!(c.err("app.launch", json!({"path": "notepad.exe"})), "bad_path"); // not absolute
-    assert_eq!(c.err("app.launch", json!({"path": "C:\\Windows\\System32\\nope.exe"})), "not_found");
-    for p in [
-        "C:\\Windows\\System32\\x.bat",
-        "C:\\x.cmd",
-        "C:\\x.ps1",
-        "C:\\x.vbs",
-        "C:\\x.lnk",
-        "C:\\x.js",
-    ] {
+
+    // A relative path is refused on every platform (on Unix a "C:\..." string
+    // is also just a relative name, so this covers it there too).
+    assert_eq!(c.err("app.launch", json!({"path": "notepad.exe"})), "bad_path");
+
+    // The remaining checks use absolute paths, whose syntax differs per OS; the
+    // behaviour under test (missing target, script/shortcut extensions, and
+    // NUL-in-argv) is the same everywhere.
+    #[cfg(windows)]
+    let (missing, scripts, real_exe) = (
+        "C:\\Windows\\System32\\nope.exe",
+        [
+            "C:\\Windows\\System32\\x.bat", "C:\\x.cmd", "C:\\x.ps1",
+            "C:\\x.vbs", "C:\\x.lnk", "C:\\x.js",
+        ],
+        "C:\\Windows\\System32\\cmd.exe",
+    );
+    #[cfg(not(windows))]
+    let (missing, scripts, real_exe) = (
+        "/usr/bin/__conduit_definitely_missing__",
+        ["/tmp/x.bat", "/tmp/x.cmd", "/tmp/x.ps1", "/tmp/x.vbs", "/tmp/x.lnk", "/tmp/x.js"],
+        "/bin/sh",
+    );
+
+    assert_eq!(c.err("app.launch", json!({"path": missing})), "not_found");
+    for p in scripts {
         assert_eq!(c.err("app.launch", json!({"path": p})), "denied", "{p} must be refused");
     }
-    // argv is never a shell string
+    // argv is never a shell string: a real executable, but a NUL in an argument.
     assert_eq!(
-        c.err("app.launch", json!({"path": "C:\\Windows\\System32\\cmd.exe", "args": ["a\u{0}b"]})),
+        c.err("app.launch", json!({"path": real_exe, "args": ["a\u{0}b"]})),
         "bad_params"
     );
 }
