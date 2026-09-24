@@ -1,0 +1,111 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebShell self-test</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 52rem; color: #1b1b1b; }
+  h1 { font-size: 1.3rem; }
+  button { font: inherit; padding: .4rem .8rem; margin: 0 .4rem .4rem 0; }
+  #log { background: #10151a; color: #d8e2ea; padding: 1rem; border-radius: 6px;
+         white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; }
+  .ok { color: #6fe08a; } .bad { color: #ff8b7a; }
+</style>
+<h1>WebShell self-test</h1>
+<p>Served by the host app itself, so this page's origin is <code id="org"></code>.</p>
+<button id="run">Run suite</button>
+<button id="hw">Hardware info</button>
+<button id="launch">Launch notepad (asks for consent)</button>
+<button id="reset">Forget token</button>
+<div id="log"></div>
+<script>
+const log = document.getElementById('log');
+const org = location.origin;
+document.getElementById('org').textContent = org;
+const P = () => Number(location.port || 8765);
+let ws = null, id = 1, pending = new Map();
+const say = (m, cls) => { const s = document.createElement('span');
+  s.className = cls || ''; s.textContent = m + '\n'; log.appendChild(s); };
+
+const tokKey = () => 'webshell.token.' + P();
+async function pair() {
+  const r = await fetch('/pair', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ perms: ['fs', 'hw', 'launch'] }) });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error.message);
+  localStorage.setItem(tokKey(), j.result.token);
+  return j.result.token;
+}
+function send(method, params) {
+  return new Promise((res, rej) => {
+    const i = id++;
+    pending.set(i, { res, rej });
+    ws.send(JSON.stringify({ id: i, method, params: params || {} }));
+    setTimeout(() => { if (pending.delete(i)) rej(new Error('timeout')); }, 120000);
+  });
+}
+async function connect() {
+  if (ws && ws.readyState === 1) return;
+  let t = localStorage.getItem(tokKey()) || await pair();
+  await new Promise((res, rej) => {
+    const s = new WebSocket('ws://127.0.0.1:' + P() + '/ws');
+    s.onmessage = (e) => { const m = JSON.parse(e.data); const p = pending.get(m.id);
+      if (!p) return; pending.delete(m.id);
+      m.ok ? p.res(m.result) : p.rej(new Error(m.error.code + ': ' + m.error.message)); };
+    s.onerror = () => rej(new Error('socket error'));
+    s.onclose = () => { ws = null; };
+    s.onopen = () => { ws = s; send('auth', { token: t }).then(res, rej); };
+  });
+}
+
+async function expectFail(name, method, params) {
+  try { await send(method, params); say('FAIL ' + name + ' — should have been rejected', 'bad'); return 0; }
+  catch (e) { say('pass ' + name + ' → ' + e.message, 'ok'); return 1; }
+}
+async function expectOk(name, method, params, check) {
+  try {
+    const r = await send(method, params);
+    if (check && !check(r)) { say('FAIL ' + name + ' — bad result ' + JSON.stringify(r), 'bad'); return 0; }
+    say('pass ' + name + ' → ' + JSON.stringify(r).slice(0, 160), 'ok'); return 1;
+  } catch (e) { say('FAIL ' + name + ' — ' + e.message, 'bad'); return 0; }
+}
+
+document.getElementById('run').onclick = async () => {
+  log.textContent = '';
+  try { await connect(); } catch (e) { say('cannot connect: ' + e.message, 'bad'); return; }
+  let n = 0, total = 0;
+  const t = async (f) => { total++; n += await f; };
+  await t(expectOk('ping', 'ping', {}, r => r.pong));
+  await t(expectOk('write', 'fs.write', { path: 'saves/slot1.txt', data: 'hello webshell' }, r => r.size === 14));
+  await t(expectOk('read', 'fs.read', { path: 'saves/slot1.txt' }, r => r.data === 'hello webshell'));
+  await t(expectOk('append', 'fs.write', { path: 'saves/slot1.txt', data: '!', append: true }, r => r.size === 15));
+  await t(expectOk('binary', 'fs.write', { path: 'bin/blob.dat', data: 'AAECAw==', encoding: 'base64' }, r => r.size === 4));
+  await t(expectOk('binary read', 'fs.read', { path: 'bin/blob.dat', encoding: 'base64' }, r => r.data === 'AAECAw=='));
+  await t(expectOk('list', 'fs.list', { path: '' }, r => r.entries.length >= 2));
+  await t(expectOk('stat', 'fs.stat', { path: 'saves/slot1.txt' }, r => r.exists));
+  await t(expectOk('quota', 'fs.quota', {}, r => r.used > 0 && r.limit > r.used));
+  await t(expectOk('hw', 'hw.info', {}, r => r.cpu.logical_cores > 0 && r.memory.total > 0));
+  await t(expectFail('escape ..', 'fs.read', { path: '../../grants.json' }));
+  await t(expectFail('absolute path', 'fs.read', { path: 'C:\\Windows\\win.ini' }));
+  await t(expectFail('device name', 'fs.write', { path: 'nul', data: 'x' }));
+  await t(expectFail('unknown method', 'fs.nuke', {}));
+  await t(expectFail('batch file launch', 'app.launch', { path: 'C:\\Windows\\System32\\x.bat' }));
+  await t(expectOk('delete', 'fs.delete', { path: 'bin', recursive: true }, r => !!r.deleted));
+  say(`\n${n}/${total} passed`, n === total ? 'ok' : 'bad');
+};
+document.getElementById('hw').onclick = async () => {
+  log.textContent = '';
+  try { await connect(); say(JSON.stringify(await send('hw.info'), null, 2)); }
+  catch (e) { say(e.message, 'bad'); }
+};
+document.getElementById('launch').onclick = async () => {
+  log.textContent = '';
+  try { await connect();
+    say('check the app console for the consent prompt…');
+    say(JSON.stringify(await send('app.launch', { path: 'C:\\Windows\\System32\\notepad.exe' })), 'ok');
+  } catch (e) { say(e.message, 'bad'); }
+};
+document.getElementById('reset').onclick = async () => {
+  try { await connect(); await send('revoke'); } catch (e) {}
+  localStorage.removeItem(tokKey()); ws = null;
+  say('token forgotten; next action re-pairs');
+};
+</script>

@@ -1,0 +1,129 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebShell extension harness</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 52rem; }
+  #log { background: #10151a; color: #d8e2ea; padding: 1rem; border-radius: 6px;
+         white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; }
+  .ok { color: #6fe08a; } .bad { color: #ff8b7a; }
+  button { font: inherit; padding: .4rem .8rem; }
+</style>
+<h1>TurboWarp extension harness</h1>
+<p>Runs <code>/turbowarp/extension.js</code> against a minimal Scratch VM shim, then
+calls every block the same way TurboWarp would.</p>
+<button id="run">Run extension tests</button>
+<div id="log"></div>
+<script>
+// --- minimal stand-in for the bits of the Scratch API the extension uses ----
+let registered = null;
+window.Scratch = {
+  BlockType: { COMMAND: 'command', REPORTER: 'reporter', BOOLEAN: 'Boolean' },
+  ArgumentType: { STRING: 'string', NUMBER: 'number' },
+  Cast: {
+    toString: (v) => (v === null || v === undefined ? '' : String(v)),
+    toNumber: (v) => (Number.isFinite(Number(v)) ? Number(v) : 0),
+  },
+  extensions: { unsandboxed: true, register: (e) => { registered = e; } },
+  translate: (s) => s,
+};
+const log = document.getElementById('log');
+const say = (m, c) => { const s = document.createElement('span');
+  s.className = c || ''; s.textContent = m + '\n'; log.appendChild(s); };
+
+function load() {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = '/turbowarp/extension.js';
+    s.onload = res; s.onerror = () => rej(new Error('script failed to load'));
+    document.head.appendChild(s);
+  });
+}
+
+let pass = 0, total = 0;
+async function check(name, fn, want) {
+  total++;
+  try {
+    const got = await fn();
+    const good = typeof want === 'function' ? want(got) : got === want;
+    if (good) { pass++; say('pass ' + name + ' → ' + JSON.stringify(got), 'ok'); }
+    else say('FAIL ' + name + ' → ' + JSON.stringify(got), 'bad');
+  } catch (e) { say('FAIL ' + name + ' threw ' + e.message, 'bad'); }
+}
+
+document.getElementById('run').onclick = async () => {
+  log.textContent = ''; pass = 0; total = 0;
+  try { localStorage.removeItem('webshell.token.' + (location.port || 8765)); } catch (e) {}
+  if (!registered) {
+    try { await load(); } catch (e) { say('cannot load extension: ' + e.message, 'bad'); return; }
+  }
+  const ext = registered;
+  if (!ext) { say('extension did not register', 'bad'); return; }
+
+  const info = ext.getInfo();
+  say('registered "' + info.id + '" with ' + info.blocks.filter((b) => b !== '---').length + ' blocks');
+
+  // Every declared opcode must exist as a method.
+  const missing = info.blocks.filter((b) => b !== '---').map((b) => b.opcode)
+    .filter((op) => typeof ext[op] !== 'function');
+  await check('all opcodes implemented', () => missing, (m) => m.length === 0);
+
+  await check('connect', async () => { await ext.connect({ PORT: Number(location.port) || 8765 }); return ext.error(); }, '');
+  await check('connected?', () => ext.connected(), true);
+  await check('granted permissions', () => ext.perms(), (v) => v.includes('fs') && v.includes('hw'));
+
+  await check('save file', async () => { await ext.writeFile({ PATH: 'tw/a.txt', DATA: 'from turbowarp' }); return ext.error(); }, '');
+  await check('read file', () => ext.readFile({ PATH: 'tw/a.txt' }), 'from turbowarp');
+  await check('append', async () => { await ext.appendFile({ PATH: 'tw/a.txt', DATA: '!' }); return ext.readFile({ PATH: 'tw/a.txt' }); }, 'from turbowarp!');
+  await check('file exists?', () => ext.fileExists({ PATH: 'tw/a.txt' }), true);
+  await check('missing file is not reported as existing', () => ext.fileExists({ PATH: 'tw/nope.txt' }), false);
+  await check('file size', () => ext.fileSize({ PATH: 'tw/a.txt' }), 15);
+  await check('make folder', async () => { await ext.makeFolder({ PATH: 'tw/sub' }); return ext.fileExists({ PATH: 'tw/sub' }); }, true);
+  await check('list folder', () => ext.listFiles({ PATH: 'tw' }), (v) => v.includes('a.txt') && v.includes('sub/'));
+  await check('quota used', () => ext.quota({ FIELD: 'used bytes' }), (v) => v > 0);
+  await check('quota limit', () => ext.quota({ FIELD: 'limit bytes' }), (v) => v > 1000);
+
+  await check('hardware cpu', () => ext.hwField({ FIELD: 'cpu' }), (v) => v.length > 3);
+  await check('hardware cores', () => ext.hwField({ FIELD: 'logical cores' }), (v) => v >= 1);
+  await check('hardware ram mb', () => ext.hwField({ FIELD: 'ram total mb' }), (v) => v > 256);
+  await check('hardware json', () => ext.hwInfo(), (v) => JSON.parse(v).os.arch.length > 2);
+
+  await check('bad path is reported, not thrown', async () => {
+    await ext.writeFile({ PATH: '../escape.txt', DATA: 'x' }); return ext.error();
+  }, (v) => v.indexOf('bad_path') === 0);
+  await check('script host launch refused', async () => {
+    await ext.launch({ PATH: 'C:\\Windows\\System32\\x.bat', ARGS: '' }); return ext.error();
+  }, (v) => v.indexOf('denied') === 0);
+  await check('raw call', () => ext.raw({ METHOD: 'ping', PARAMS: '{}' }), '{"pong":true}');
+  await check('raw call with bad JSON params', async () => { await ext.raw({ METHOD: 'ping', PARAMS: '{' }); return ext.error(); }, (v) => v.indexOf('params is not JSON') === 0);
+
+  // easy key/value store
+  await check('kv use store', async () => { ext.kvStore({ NAME: 'testrun' }); return true; }, true);
+  await check('kv save', async () => { await ext.kvSet({ KEY: 'score', VALUE: '42' }); return ext.error(); }, '');
+  await check('kv load', () => ext.kvGet({ KEY: 'score' }), '42');
+  await check('kv has', () => ext.kvHas({ KEY: 'score' }), true);
+  await check('kv missing', () => ext.kvHas({ KEY: 'nope' }), false);
+  await check('kv keys', async () => { await ext.kvSet({ KEY: 'name', VALUE: 'ana' }); return ext.kvKeys(); }, (v) => JSON.parse(v).includes('score') && JSON.parse(v).includes('name'));
+  await check('kv delete', async () => { await ext.kvDelete({ KEY: 'score' }); return ext.kvHas({ KEY: 'score' }); }, false);
+
+  // file copy / move
+  await check('copy file', async () => { await ext.writeFile({ PATH: 'tw/a.txt', DATA: 'x' }); await ext.copyFile({ FROM: 'tw/a.txt', TO: 'tw/b.txt' }); return ext.fileExists({ PATH: 'tw/b.txt' }); }, true);
+  await check('move file', async () => { await ext.moveFile({ FROM: 'tw/b.txt', TO: 'tw/c.txt' }); return (await ext.fileExists({ PATH: 'tw/c.txt' })) && !(await ext.fileExists({ PATH: 'tw/b.txt' })); }, true);
+
+  // live stats + system queries (no consent needed)
+  await check('live cpu', () => ext.liveStat({ FIELD: 'cpu %' }), (v) => v >= 0 && v <= 100);
+  await check('live ram %', () => ext.liveStat({ FIELD: 'ram %' }), (v) => v > 0 && v <= 100);
+  await check('on battery boolean', async () => { const v = await ext.onBattery(); return typeof v === 'boolean'; }, true);
+  await check('is admin boolean', async () => { const v = await ext.isAdmin(); return typeof v === 'boolean'; }, true);
+  await check('processes list', () => ext.processes(), (v) => JSON.parse(v).length > 0);
+  // Volume / media: read-only here so running the suite never changes playback.
+  await check('system volume', () => ext.volume(), (v) => v >= 0 && v <= 100);
+  await check('system sound muted? is boolean', async () => typeof (await ext.muted()), 'boolean');
+  await check('now playing status', () => ext.nowPlaying({ FIELD: 'status' }),
+    (v) => v === '' || ['closed', 'opened', 'changing', 'stopped', 'playing', 'paused', 'unknown'].includes(v));
+  await check('copy to clipboard', async () => { await ext.clipWrite({ TEXT: 'webshell-test' }); return ext.error(); }, '');
+
+  await check('cleanup', async () => { await ext.deleteFile({ PATH: 'tw' }); await ext.deleteFile({ PATH: 'kv' }); return ext.fileExists({ PATH: 'tw' }); }, false);
+
+  say('\n' + pass + '/' + total + ' passed', pass === total ? 'ok' : 'bad');
+};
+</script>

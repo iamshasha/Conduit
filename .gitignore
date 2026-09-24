@@ -1,0 +1,17 @@
+# Rust
+/target/
+
+# WinUI / .NET
+gui-winui/bin/
+gui-winui/obj/
+gui/bin/
+gui/obj/
+
+# Publish output
+**/publish/
+*.user
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vs/
