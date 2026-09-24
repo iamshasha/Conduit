@@ -97,9 +97,36 @@ jobs:
           name: linux
           path: dist/*
 
+  # ------------------------------------------------------------------ macOS
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+      - name: Icon deps
+        run: brew install librsvg
+      - name: Build universal core
+        run: |
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          mkdir -p target/universal
+          lipo -create -output target/universal/conduit \
+            target/x86_64-apple-darwin/release/conduit \
+            target/aarch64-apple-darwin/release/conduit
+      - name: Build Swift GUI
+        run: ./packaging/macos/build-gui.sh
+      - name: Assemble .app and .dmg
+        run: ./packaging/macos/build-dmg.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+
   # ---------------------------------------------------------------- publish
   release:
-    needs: [windows, linux]
+    needs: [windows, linux, macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -110,5 +137,5 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
-# macOS (Swift GUI, .app/.dmg) and a styled WinUI-based Windows installer are in
-# progress; their jobs land here once those pieces exist and build on CI.
+# A styled, modern Windows installer (Velopack is the leading option) plus
+# download-and-apply auto-update land here once that approach is settled.
