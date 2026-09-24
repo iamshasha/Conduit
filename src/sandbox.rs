@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn rejects_escapes() {
-        let root = std::env::temp_dir().join("webshell_sandbox_test");
+        let root = std::env::temp_dir().join("conduit_sandbox_test");
         std::fs::create_dir_all(&root).unwrap();
         let root = root.canonicalize().unwrap();
         for bad in [
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn move_tree_moves_and_refuses_bad_targets() {
-        let base = std::env::temp_dir().join(format!("webshell_move_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("conduit_move_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let from = base.join("a");
         std::fs::create_dir_all(from.join("site/saves")).unwrap();

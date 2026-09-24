@@ -475,6 +475,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "conduit"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "arboard",
+ "axum",
+ "base64 0.22.1",
+ "dirs 5.0.1",
+ "notify-rust",
+ "rand 0.8.8",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysinfo",
+ "tao",
+ "tokio",
+ "tray-icon",
+ "tungstenite 0.24.0",
+ "ureq",
+ "windows 0.62.2",
+ "windows-sys 0.61.2",
+ "winreg",
+]
+
+[[package]]
 name = "cookie"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3882,32 +3908,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
 dependencies = [
  "rustls-pki-types",
-]
-
-[[package]]
-name = "webshell"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "arboard",
- "axum",
- "base64 0.22.1",
- "dirs 5.0.1",
- "notify-rust",
- "rand 0.8.8",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "sysinfo",
- "tao",
- "tokio",
- "tray-icon",
- "tungstenite 0.24.0",
- "ureq",
- "windows 0.62.2",
- "windows-sys 0.61.2",
- "winreg",
 ]
 
 [[package]]

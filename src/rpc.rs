@@ -328,7 +328,7 @@ async fn dispatch_inner(ctx: &Ctx, method: &str, params: &Value) -> R {
                 let _ = notify_rust::Notification::new()
                     .summary(&title)
                     .body(&format!("{body}\n— {origin}"))
-                    .appname("WebShell")
+                    .appname("Conduit")
                     .show();
             });
             Ok(json!({"shown": true}))

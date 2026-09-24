@@ -1,5 +1,5 @@
 //! OS integration: elevation, media keys, power, battery, shell open, and the
-//! registry bits (webshell:// protocol, start with Windows).
+//! registry bits (conduit:// protocol, start with Windows).
 //!
 //! Everything here is Windows-first; other platforms get `unsupported` errors
 //! instead of half-working behaviour.
@@ -480,11 +480,11 @@ pub fn reveal(path: &std::path::Path, select: bool) -> Result<(), String> {
 // ----------------------------------------------------------------- registry
 
 #[cfg(windows)]
-const PROTO_KEY: &str = r"Software\Classes\webshell";
+const PROTO_KEY: &str = r"Software\Classes\conduit";
 #[cfg(windows)]
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
-/// Register `webshell://` for the current user (no admin needed). The handler
+/// Register `conduit://` for the current user (no admin needed). The handler
 /// only ever shows the window; URL contents are never executed.
 #[cfg(windows)]
 pub fn set_protocol(on: bool) -> Result<(), String> {
@@ -499,7 +499,7 @@ pub fn set_protocol(on: bool) -> Result<(), String> {
     }
     let exe = exe_path();
     let (k, _) = hk.create_subkey(PROTO_KEY).map_err(|e| e.to_string())?;
-    k.set_value("", &"URL:WebShell").map_err(|e| e.to_string())?;
+    k.set_value("", &"URL:Conduit").map_err(|e| e.to_string())?;
     k.set_value("URL Protocol", &"").map_err(|e| e.to_string())?;
     let (icon, _) = k.create_subkey("DefaultIcon").map_err(|e| e.to_string())?;
     icon.set_value("", &format!("\"{exe}\",0")).map_err(|e| e.to_string())?;
@@ -524,9 +524,9 @@ pub fn set_autostart(on: bool) -> Result<(), String> {
         .open_subkey_with_flags(RUN_KEY, KEY_SET_VALUE)
         .map_err(|e| e.to_string())?;
     if on {
-        k.set_value("WebShell", &format!("\"{}\" --minimized", exe_path())).map_err(|e| e.to_string())
+        k.set_value("Conduit", &format!("\"{}\" --minimized", exe_path())).map_err(|e| e.to_string())
     } else {
-        match k.delete_value("WebShell") {
+        match k.delete_value("Conduit") {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.to_string()),
@@ -539,7 +539,7 @@ pub fn autostart_enabled() -> bool {
     use winreg::{enums::HKEY_CURRENT_USER, RegKey};
     RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(RUN_KEY)
-        .and_then(|k| k.get_value::<String, _>("WebShell"))
+        .and_then(|k| k.get_value::<String, _>("Conduit"))
         .is_ok()
 }
 

@@ -36,7 +36,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             port: 8765,
-            data_dir: dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("WebShell"),
+            data_dir: dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("Conduit"),
             max_file: 32 * 1024 * 1024,
             quota: 256 * 1024 * 1024,
             max_files: 10_000,
@@ -494,15 +494,15 @@ impl AppState {
         can_remember: bool,
     ) -> ConsentAnswer {
         if self.cfg.deny_all {
-            eprintln!("[webshell] DENIED (--deny): {kind} {origin} {detail}");
+            eprintln!("[conduit] DENIED (--deny): {kind} {origin} {detail}");
             return ConsentAnswer::deny();
         }
         if self.cfg.auto_yes {
             if NEVER_AUTO.contains(&kind) {
-                eprintln!("[webshell] DENIED ({kind} is never auto-approved): {origin}");
+                eprintln!("[conduit] DENIED ({kind} is never auto-approved): {origin}");
                 return ConsentAnswer::deny();
             }
-            eprintln!("[webshell] ALLOWED (--yes): {kind} {origin} {detail}");
+            eprintln!("[conduit] ALLOWED (--yes): {kind} {origin} {detail}");
             return ConsentAnswer { allow: true, perms, remember: false };
         }
         // One outstanding prompt per origin+kind; a page can't stack 50 dialogs.
@@ -546,8 +546,8 @@ impl AppState {
         let ask = tokio::task::spawn_blocking(move || {
             use std::io::{BufRead, Write};
             let mut out = std::io::stderr();
-            let _ = writeln!(out, "\n[webshell] {q}");
-            let _ = write!(out, "[webshell] Allow? [y/N] ");
+            let _ = writeln!(out, "\n[conduit] {q}");
+            let _ = write!(out, "[conduit] Allow? [y/N] ");
             let _ = out.flush();
             let mut line = String::new();
             match std::io::stdin().lock().read_line(&mut line) {

@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Windows.System;
 
-namespace WebShell.Gui;
+namespace Conduit.Gui;
 
 /// <summary>
 /// One small always-on-top window that works through the queue of pending

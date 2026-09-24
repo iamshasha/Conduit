@@ -8,7 +8,7 @@ use std::time::Duration;
 
 /// owner/repo to check. Overridable so a fork can point elsewhere.
 fn repo() -> String {
-    std::env::var("WEBSHELL_REPO").unwrap_or_else(|_| "webshell/webshell".to_string())
+    std::env::var("CONDUIT_REPO").unwrap_or_else(|_| "iamshasha/Conduit".to_string())
 }
 
 fn parse(v: &str) -> Vec<u32> {
@@ -26,7 +26,7 @@ pub fn check() -> Value {
     let current = env!("CARGO_PKG_VERSION");
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo());
     let result = ureq::get(&url)
-        .header("User-Agent", concat!("WebShell/", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", concat!("Conduit/", env!("CARGO_PKG_VERSION")))
         .header("Accept", "application/vnd.github+json")
         .config()
         .timeout_global(Some(Duration::from_secs(10)))

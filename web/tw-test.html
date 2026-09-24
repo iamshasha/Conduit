@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>WebShell extension harness</title>
+<title>Conduit extension harness</title>
 <style>
   body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 52rem; }
   #log { background: #10151a; color: #d8e2ea; padding: 1rem; border-radius: 6px;
@@ -52,7 +52,7 @@ async function check(name, fn, want) {
 
 document.getElementById('run').onclick = async () => {
   log.textContent = ''; pass = 0; total = 0;
-  try { localStorage.removeItem('webshell.token.' + (location.port || 8765)); } catch (e) {}
+  try { localStorage.removeItem('conduit.token.' + (location.port || 8765)); } catch (e) {}
   if (!registered) {
     try { await load(); } catch (e) { say('cannot load extension: ' + e.message, 'bad'); return; }
   }
@@ -120,7 +120,7 @@ document.getElementById('run').onclick = async () => {
   await check('system sound muted? is boolean', async () => typeof (await ext.muted()), 'boolean');
   await check('now playing status', () => ext.nowPlaying({ FIELD: 'status' }),
     (v) => v === '' || ['closed', 'opened', 'changing', 'stopped', 'playing', 'paused', 'unknown'].includes(v));
-  await check('copy to clipboard', async () => { await ext.clipWrite({ TEXT: 'webshell-test' }); return ext.error(); }, '');
+  await check('copy to clipboard', async () => { await ext.clipWrite({ TEXT: 'conduit-test' }); return ext.error(); }, '');
 
   await check('cleanup', async () => { await ext.deleteFile({ PATH: 'tw' }); await ext.deleteFile({ PATH: 'kv' }); return ext.fileExists({ PATH: 'tw' }); }, false);
 

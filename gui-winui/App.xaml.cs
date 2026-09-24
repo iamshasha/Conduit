@@ -2,10 +2,10 @@ using System.Text.Json.Nodes;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 
-namespace WebShell.Gui;
+namespace Conduit.Gui;
 
 /// <summary>
-/// Started by webshell.exe with <c>--pipe NAME --key KEY [--theme T]</c>.
+/// Started by conduit.exe with <c>--pipe NAME --key KEY [--theme T]</c>.
 /// Opens windows only when the core asks, and exits after the last one
 /// closes (DispatcherShutdownMode.OnLastWindowClose), so nothing lingers.
 /// </summary>
@@ -36,7 +36,7 @@ public partial class App : Application
     {
         try
         {
-            File.AppendAllText(Path.Combine(Path.GetTempPath(), "webshell-gui.log"),
+            File.AppendAllText(Path.Combine(Path.GetTempPath(), "conduit-gui.log"),
                 $"[{DateTime.Now:O}] {text}\n");
         }
         catch { /* logging must never crash the UI */ }

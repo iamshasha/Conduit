@@ -1,6 +1,6 @@
-// WebShell — TurboWarp extension.
+// Conduit — TurboWarp extension.
 //
-// Talks to the local WebShell host app over a WebSocket on 127.0.0.1.
+// Talks to the local Conduit host app over a WebSocket on 127.0.0.1.
 // Load it unsandboxed: a sandboxed extension runs in a null-origin iframe and
 // the host app rejects null origins on purpose.
 //
@@ -10,13 +10,13 @@
   'use strict';
 
   if (!Scratch.extensions.unsandboxed) {
-    throw new Error('The WebShell extension must be loaded unsandboxed.');
+    throw new Error('The Conduit extension must be loaded unsandboxed.');
   }
 
   const DEFAULT_PORT = 8765;
   const PERMS = ['fs', 'hw', 'launch', 'system', 'process', 'power', 'clipboard', 'notify'];
 
-  class WebShell {
+  class Conduit {
     constructor() {
       this.port = DEFAULT_PORT;
       this.ws = null;
@@ -32,7 +32,7 @@
     }
 
     tokenKey() {
-      return `webshell.token.${this.port}`;
+      return `conduit.token.${this.port}`;
     }
 
     getToken() {
@@ -111,7 +111,7 @@
           reject(new Error(msg));
         };
         ws.onmessage = (ev) => this._onMessage(ev);
-        ws.onerror = () => fail('WebShell host not reachable — is the app running?');
+        ws.onerror = () => fail('Conduit host not reachable — is the app running?');
         ws.onclose = () => {
           this.ws = null;
           this.authed = false;
@@ -188,16 +188,16 @@
 
     getInfo() {
       return {
-        id: 'webshell',
-        name: 'WebShell',
+        id: 'conduit',
+        name: 'Conduit',
         color1: '#2f6f4f',
         color2: '#245740',
         blocks: [
           { opcode: 'connect', blockType: Scratch.BlockType.COMMAND,
-            text: 'connect to WebShell on port [PORT]',
+            text: 'connect to Conduit on port [PORT]',
             arguments: { PORT: { type: Scratch.ArgumentType.NUMBER, defaultValue: DEFAULT_PORT } } },
           { opcode: 'connected', blockType: Scratch.BlockType.BOOLEAN, text: 'connected?' },
-          { opcode: 'error', blockType: Scratch.BlockType.REPORTER, text: 'last WebShell error' },
+          { opcode: 'error', blockType: Scratch.BlockType.REPORTER, text: 'last Conduit error' },
           { opcode: 'perms', blockType: Scratch.BlockType.REPORTER, text: 'granted permissions' },
           '---',
           { opcode: 'writeFile', blockType: Scratch.BlockType.COMMAND,
@@ -624,5 +624,5 @@
     }
   }
 
-  Scratch.extensions.register(new WebShell());
+  Scratch.extensions.register(new Conduit());
 })(Scratch);

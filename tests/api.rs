@@ -20,14 +20,14 @@ impl Drop for Server {
 
 fn start(extra: &[&str]) -> Server {
     let dir = std::env::temp_dir().join(format!(
-        "webshell_it_{}_{}",
+        "conduit_it_{}_{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_webshell"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_conduit"));
     cmd.args(["--headless", "--port", "0", "--data-dir", dir.to_str().unwrap()]);
     if !extra.contains(&"--deny") {
         cmd.arg("--yes");
@@ -35,7 +35,7 @@ fn start(extra: &[&str]) -> Server {
     cmd.args(extra)
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let mut child = cmd.spawn().expect("spawn webshell");
+    let mut child = cmd.spawn().expect("spawn conduit");
     let mut line = String::new();
     BufReader::new(child.stdout.as_mut().unwrap())
         .read_line(&mut line)
@@ -105,7 +105,7 @@ fn health_is_public() {
         .unwrap()
         .json()
         .unwrap();
-    assert_eq!(r["name"], json!("webshell"));
+    assert_eq!(r["name"], json!("conduit"));
 }
 
 #[test]

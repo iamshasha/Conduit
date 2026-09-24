@@ -4,7 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
-namespace WebShell.Gui;
+namespace Conduit.Gui;
 
 /// <summary>
 /// A small file browser over one site's sandbox. It never touches the disk

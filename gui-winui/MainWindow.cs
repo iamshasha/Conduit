@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Shapes;
 
-namespace WebShell.Gui;
+namespace Conduit.Gui;
 
 /// <summary>
 /// Dashboard. Settings-tool silhouette: NavigationView on the left, pages of
@@ -66,7 +66,7 @@ sealed class MainWindow : Window
     public MainWindow(JsonNode snapshot)
     {
         _snap = snapshot.DeepClone();
-        Title = "WebShell";
+        Title = "Conduit";
         SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
         AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
@@ -1106,7 +1106,7 @@ sealed class MainWindow : Window
             }
             Core.Cmd("check_updates");
         });
-        col.Children.Add(Card("", "WebShell", _snap["version"]?.GetValue<string>(), check));
+        col.Children.Add(Card("", "Conduit", _snap["version"]?.GetValue<string>(), check));
 
         col.Children.Add(Card("", Loc.T("quit"), null,
             Ui.With(new Button { Content = Loc.T("quit") }, b => b.Click += (_, _) => Core.Cmd("quit"))));
@@ -1196,7 +1196,7 @@ sealed class MainWindow : Window
             return;
         }
         if (folder is null) return;
-        var target = System.IO.Path.Combine(folder.Path, "WebShell sites");
+        var target = System.IO.Path.Combine(folder.Path, "Conduit sites");
         if (await Confirm(Loc.T("change_location"), Loc.T("move_confirm", ("path", target)), Loc.T("change_location")))
             Core.Cmd("move_storage", new JsonObject { ["path"] = folder.Path });
     }

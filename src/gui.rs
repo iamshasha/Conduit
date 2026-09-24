@@ -1,8 +1,8 @@
 //! Desktop shell: a tray icon owned by this process, and an on-demand WinUI 3
-//! window process (`gui\WebShell.Gui.exe`) for the dashboard and consent
+//! window process (`gui\Conduit.Gui.exe`) for the dashboard and consent
 //! prompts.
 //!
-//! * Idle WebShell is just the tray icon and the server (~14 MB). The WinUI
+//! * Idle Conduit is just the tray icon and the server (~14 MB). The WinUI
 //!   process starts when a window is needed and exits when its last window
 //!   closes.
 //! * The two talk over a named pipe with newline-delimited JSON. The pipe name
@@ -47,13 +47,13 @@ pub fn run(state: Arc<AppState>, rt: tokio::runtime::Runtime, listener: std::net
 
     // ---- tray
     let menu = Menu::new();
-    let open_item = MenuItem::with_id("open", "Open WebShell", true, None);
+    let open_item = MenuItem::with_id("open", "Open Conduit", true, None);
     let quit_item = MenuItem::with_id("quit", "Quit", true, None);
     let _ = menu.append_items(&[&open_item, &PredefinedMenuItem::separator(), &quit_item]);
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
-        .with_tooltip(format!("WebShell — 127.0.0.1:{}", state.cfg.port))
+        .with_tooltip(format!("Conduit — 127.0.0.1:{}", state.cfg.port))
         .with_icon(tray_icon::Icon::from_rgba(icon_rgba(32), 32, 32).expect("icon"))
         .build()
         .ok();
@@ -105,7 +105,7 @@ pub fn run(state: Arc<AppState>, rt: tokio::runtime::Runtime, listener: std::net
             Event::UserEvent(UserEvent::Gui(line)) => {
                 let Ok(msg) = serde_json::from_str::<Value>(&line) else { return };
                 if cfg!(debug_assertions) && msg["cmd"] != "stats" {
-                    eprintln!("[webshell] gui -> {line}");
+                    eprintln!("[conduit] gui -> {line}");
                 }
                 match msg["cmd"].as_str().unwrap_or("") {
                     "quit" => *flow = ControlFlow::Exit,
@@ -149,7 +149,7 @@ fn open_main(link: &Link, state: &AppState) {
         std::thread::spawn(move || {
             message_box(
                 &format!(
-                    "WebShell is running in the tray, but its window component is missing.\n\nExpected at:\n{where_}\n\nBuild it with:\ndotnet publish gui-winui -c Release -o target\\release\\gui"
+                    "Conduit is running in the tray, but its window component is missing.\n\nExpected at:\n{where_}\n\nBuild it with:\ndotnet publish gui-winui -c Release -o target\\release\\gui"
                 ),
                 false,
             );
@@ -162,7 +162,7 @@ fn open_main(link: &Link, state: &AppState) {
 fn cache_paths(state: &AppState) -> Vec<PathBuf> {
     vec![
         state.cfg.data_dir.join("webview"),
-        std::env::temp_dir().join("webshell-gui.log"),
+        std::env::temp_dir().join("conduit-gui.log"),
     ]
 }
 
@@ -461,7 +461,7 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                 return toast(Err("pick a folder".into()));
             }
             // Always our own subfolder, so we never mix with the user's files.
-            let to = picked.join("WebShell sites");
+            let to = picked.join("Conduit sites");
             let (st, tx) = (state.clone(), link.sender());
             link.rt.spawn_blocking(move || {
                 // ponytail: a request arriving mid-move may see a missing file;
@@ -521,12 +521,12 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
 
 // ------------------------------------------------------------------ the link
 
-/// `gui\WebShell.Gui.exe` next to our own exe, or `WEBSHELL_GUI`.
+/// `gui\Conduit.Gui.exe` next to our own exe, or `CONDUIT_GUI`.
 fn gui_exe() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("WEBSHELL_GUI") {
+    if let Ok(p) = std::env::var("CONDUIT_GUI") {
         return Some(PathBuf::from(p));
     }
-    Some(std::env::current_exe().ok()?.parent()?.join("gui").join("WebShell.Gui.exe"))
+    Some(std::env::current_exe().ok()?.parent()?.join("gui").join("Conduit.Gui.exe"))
 }
 
 struct Link {
@@ -570,7 +570,7 @@ impl Link {
         use tokio::net::windows::named_pipe::ServerOptions;
         let Some(exe) = gui_exe().filter(|p| p.is_file()) else { return false };
         let token = crate::state::random_token();
-        let name = format!(r"\\.\pipe\webshell-{}", &token[..20]);
+        let name = format!(r"\\.\pipe\conduit-{}", &token[..20]);
         let key = crate::state::random_token();
 
         let _guard = self.rt.enter();
@@ -582,7 +582,7 @@ impl Link {
         {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("[webshell] pipe: {e}");
+                eprintln!("[conduit] pipe: {e}");
                 return false;
             }
         };
@@ -594,7 +594,7 @@ impl Link {
         {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[webshell] cannot start {}: {e}", exe.display());
+                eprintln!("[conduit] cannot start {}: {e}", exe.display());
                 return false;
             }
         };
@@ -609,7 +609,7 @@ impl Link {
                 tokio::time::timeout(std::time::Duration::from_secs(20), server.connect()).await.ok()?.ok()?;
                 // Only the process we just launched may talk to us.
                 if pipe_client_pid(&server) != Some(child_pid) {
-                    eprintln!("[webshell] pipe: unexpected client, closing");
+                    eprintln!("[conduit] pipe: unexpected client, closing");
                     return None;
                 }
                 Some(())
@@ -633,7 +633,7 @@ impl Link {
                 .map(|k| AppState::eq_ct(k, &key))
                 .unwrap_or(false);
             if !key_ok {
-                eprintln!("[webshell] pipe: bad handshake");
+                eprintln!("[conduit] pipe: bad handshake");
                 let _ = child.kill();
                 let _ = proxy.send_event(UserEvent::GuiDown);
                 return;
@@ -683,7 +683,7 @@ fn message_box(text: &str, ask: bool) -> bool {
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::*;
         let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-        let (t, c) = (wide(text), wide("WebShell"));
+        let (t, c) = (wide(text), wide("Conduit"));
         let style = if ask {
             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2
         } else {
@@ -707,7 +707,7 @@ fn fallback_consent(state: Arc<AppState>, req: ConsentReq) {
             "kill" => format!("wants to end the process:\n{}", req.detail),
             "power" => format!("wants to {} this PC.", req.detail),
             "clipboard" => "wants to read your clipboard.".to_string(),
-            "elevate" => "wants to restart WebShell as administrator.".to_string(),
+            "elevate" => "wants to restart Conduit as administrator.".to_string(),
             k => format!("requests: {k} {}", req.detail),
         };
         let yes = message_box(&format!("{}\n{what}\n\nAllow?", req.origin), true);

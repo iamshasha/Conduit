@@ -1,4 +1,4 @@
-# WebShell
+# Conduit
 
 A small Rust host app that lets an **approved** website do things the browser
 sandbox forbids: keep real files in a per-site sandbox (far bigger than cookies
@@ -12,14 +12,14 @@ i18n, animated consent pop-ups) and a TurboWarp extension. Speaks WebSocket
 
 ```bash
 cargo build --release
-./target/release/webshell             # GUI + tray, listens on 127.0.0.1:8765
-./target/release/webshell --minimized # start in the tray (idle ≈ 14 MB)
-./target/release/webshell --headless  # no GUI; console consent prompts
+./target/release/conduit             # GUI + tray, listens on 127.0.0.1:8765
+./target/release/conduit --minimized # start in the tray (idle ≈ 14 MB)
+./target/release/conduit --headless  # no GUI; console consent prompts
 ```
 
 Release exe is a single ~3.6 MB file. Idle footprint is ~14 MB (tray + server);
 the dashboard's WebView2 is created only when you open a window and freed when
-you close it, so an idle WebShell stays light.
+you close it, so an idle Conduit stays light.
 
 * test page: <http://127.0.0.1:8765/test>
 * extension harness: <http://127.0.0.1:8765/test/extension>
@@ -34,7 +34,7 @@ you close it, so an idle WebShell stays light.
 * **Activity** — the last 200 method calls with result codes.
 * **Extension** — the TurboWarp URL with copy / open buttons.
 * **Settings** — language (21), theme (system/light/dark), close-to-tray,
-  start with Windows, and handle `webshell://` links.
+  start with Windows, and handle `conduit://` links.
 * **Consent pop-up** — a small always-on-top window. Pairing shows a
   per-permission checklist the user can trim; launch/kill/power/clipboard/
   elevate each show what is being asked and a "deny by default" countdown.
@@ -43,7 +43,7 @@ you close it, so an idle WebShell stays light.
 
 Elevation: the GUI (or a page with the `system` permission) can ask to relaunch
 elevated; this triggers the normal Windows UAC prompt and the new copy takes
-over the port. `webshell://` links and a second launch just bring the existing
+over the port. `conduit://` links and a second launch just bring the existing
 window forward (single-instance, authenticated with a per-run key a web page
 cannot read).
 

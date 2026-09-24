@@ -1,4 +1,4 @@
-//! WebShell — a loopback-only bridge that lets an approved website store files
+//! Conduit — a loopback-only bridge that lets an approved website store files
 //! in its own sandbox, read hardware info, and control this PC — each ability
 //! gated by a permission the user granted with a click.
 //!
@@ -41,7 +41,7 @@ use state::{AppState, Config, UiEvent};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const EXTENSION_JS: &str = include_str!("../extension/webshell.js");
+const EXTENSION_JS: &str = include_str!("../extension/conduit.js");
 const TEST_PAGE: &str = include_str!("../web/test.html");
 const TW_TEST_PAGE: &str = include_str!("../web/tw-test.html");
 
@@ -69,16 +69,16 @@ fn main() {
     let listener = match bind(opts.cfg.port, opts.wait_port) {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            // Already running (e.g. launched again from a webshell:// link):
+            // Already running (e.g. launched again from a conduit:// link):
             // bring the existing window forward and quit.
             if !opts.headless && activate_existing(&opts.cfg) {
                 std::process::exit(0);
             }
-            eprintln!("[webshell] port {} is taken by another program", opts.cfg.port);
+            eprintln!("[conduit] port {} is taken by another program", opts.cfg.port);
             std::process::exit(1);
         }
         Err(e) => {
-            eprintln!("[webshell] cannot bind 127.0.0.1:{}: {e}", opts.cfg.port);
+            eprintln!("[conduit] cannot bind 127.0.0.1:{}: {e}", opts.cfg.port);
             std::process::exit(1);
         }
     };
@@ -125,7 +125,7 @@ fn activate_existing(cfg: &Config) -> bool {
     };
     let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(3)));
     let req = format!(
-        "POST /activate HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-WebShell-Instance: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "POST /activate HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Conduit-Instance: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         cfg.port,
         key.trim()
     );
@@ -155,8 +155,8 @@ pub async fn serve(state: Arc<AppState>, listener: std::net::TcpListener) {
     let bound = listener.local_addr().expect("local_addr");
     // Machine-readable for test harnesses; keep the format stable.
     println!("LISTENING {bound}");
-    eprintln!("[webshell] data dir: {}", state.cfg.data_dir.display());
-    eprintln!("[webshell] extension: http://{bound}/turbowarp/extension.js");
+    eprintln!("[conduit] data dir: {}", state.cfg.data_dir.display());
+    eprintln!("[conduit] extension: http://{bound}/turbowarp/extension.js");
     use std::io::Write;
     let _ = std::io::stdout().flush();
 
@@ -164,7 +164,7 @@ pub async fn serve(state: Arc<AppState>, listener: std::net::TcpListener) {
 }
 
 const USAGE: &str = "\
-usage: webshell [options]
+usage: conduit [options]
   --port N              port on 127.0.0.1 (default 8765, 0 = pick a free one)
   --data-dir PATH       where grants and site sandboxes live
   --headless            no window or tray; consent prompts go to the console
@@ -175,7 +175,7 @@ usage: webshell [options]
   --quota BYTES         per-origin sandbox cap (default 268435456)
   --yes                 auto-approve prompts except power/elevation (tests/kiosk)
   --deny                auto-deny consent prompts (headless hardening)
-  --url URL             webshell:// link that started us (only shows the window)";
+  --url URL             conduit:// link that started us (only shows the window)";
 
 fn parse_args() -> Result<Opts, String> {
     let mut o = Opts { cfg: Config::default(), headless: false, minimized: false, wait_port: false, url: None };
@@ -218,7 +218,7 @@ fn parse_args() -> Result<Opts, String> {
 /// Second instance → first instance: "show your window". No Origin allowed
 /// (browsers always send one on POST) and the per-run key must match.
 async fn activate(State(state): State<Arc<AppState>>, headers: HeaderMap) -> StatusCode {
-    let key = headers.get("x-webshell-instance").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let key = headers.get("x-conduit-instance").and_then(|v| v.to_str().ok()).unwrap_or("");
     if !host_ok(&headers) || headers.contains_key(header::ORIGIN) || !AppState::eq_ct(key, &state.instance_key) {
         return StatusCode::FORBIDDEN;
     }
@@ -332,7 +332,7 @@ async fn health() -> impl IntoResponse {
         ],
         Json(json!({
             "ok": true,
-            "name": "webshell",
+            "name": "conduit",
             "version": env!("CARGO_PKG_VERSION"),
             "perms": state::PERMS,
             "methods": ["ping","perms","revoke","hw.info","sys.stats","sys.battery",
@@ -458,7 +458,7 @@ async fn pair(
     }
     let token = state::random_token();
     state.store_grant(&origin, &token, requested.clone());
-    eprintln!("[webshell] paired {origin} ({})", requested.join(","));
+    eprintln!("[conduit] paired {origin} ({})", requested.join(","));
     (
         cors(&origin),
         Json(json!({"ok": true, "result": {"token": token, "perms": requested}})),

@@ -1,4 +1,4 @@
-//! Local AI bridge. WebShell never bundles a model — it forwards to a local
+//! Local AI bridge. Conduit never bundles a model — it forwards to a local
 //! inference server the user already runs (Ollama by default, or any
 //! OpenAI-compatible endpoint such as `llama.cpp --server` / LM Studio).
 //!

@@ -11,7 +11,7 @@ using Microsoft.UI.Xaml.Markup;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 
-namespace WebShell.Gui;
+namespace Conduit.Gui;
 
 /// <summary>
 /// Newline-delimited JSON over the named pipe the core created for us.
@@ -79,7 +79,7 @@ static class Loc
 
     static JsonObject LoadAll()
     {
-        using var s = typeof(Loc).Assembly.GetManifestResourceStream("WebShell.Gui.Strings.json")!;
+        using var s = typeof(Loc).Assembly.GetManifestResourceStream("Conduit.Gui.Strings.json")!;
         return (JsonObject)JsonNode.Parse(s)!;
     }
 
@@ -241,7 +241,7 @@ static class Ui
 
     /// Automated UI tests set this so windows never take keyboard focus from
     /// whoever is using the machine.
-    static readonly bool NoActivate = Environment.GetEnvironmentVariable("WEBSHELL_GUI_NOACTIVATE") == "1";
+    static readonly bool NoActivate = Environment.GetEnvironmentVariable("CONDUIT_GUI_NOACTIVATE") == "1";
 
     /// Show a window the normal way (the dashboard).
     public static void Show(Window w)

@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    WinUI 3 window process for WebShell. Launched on demand by webshell.exe
+    WinUI 3 window process for Conduit. Launched on demand by conduit.exe
     (the Rust core) and connected to it over a private named pipe; it exits
     when its last window closes.
 
@@ -12,8 +12,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
-    <RootNamespace>WebShell.Gui</RootNamespace>
-    <AssemblyName>WebShell.Gui</AssemblyName>
+    <RootNamespace>Conduit.Gui</RootNamespace>
+    <AssemblyName>Conduit.Gui</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <Platforms>x64;ARM64</Platforms>
@@ -21,7 +21,7 @@
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
-    <!-- Makes `dotnet publish` include WebShell.Gui.pri; without it WinUI
+    <!-- Makes `dotnet publish` include Conduit.Gui.pri; without it WinUI
          cannot find its theme resources and every window fails to load. -->
     <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
