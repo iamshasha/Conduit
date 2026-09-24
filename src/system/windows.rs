@@ -1,24 +1,16 @@
-//! OS integration: elevation, media keys, power, battery, shell open, and the
-//! registry bits (conduit:// protocol, start with Windows).
-//!
-//! Everything here is Windows-first; other platforms get `unsupported` errors
-//! instead of half-working behaviour.
+//! Windows backend: elevation, media keys, Core Audio volume, WinRT media
+//! session, DXGI/PDH GPU, power, battery, shell open, and the registry bits
+//! (`conduit://` protocol, start with Windows).
 
-#[cfg(windows)]
+use super::{exe_path, vendor_name, Battery, Gpu, NowPlaying};
+
 fn wide(s: &str) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
     std::ffi::OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
 
-pub fn exe_path() -> String {
-    std::env::current_exe()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default()
-}
-
 // ---------------------------------------------------------------- elevation
 
-#[cfg(windows)]
 pub fn is_elevated() -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
@@ -42,15 +34,9 @@ pub fn is_elevated() -> bool {
     }
 }
 
-#[cfg(not(windows))]
-pub fn is_elevated() -> bool {
-    false
-}
-
 /// Start a second, elevated copy of ourselves (UAC prompt). Returns Ok once
 /// the user accepted; the caller should then exit so the new copy can take
 /// the port (it is started with `--wait-port`).
-#[cfg(windows)]
 pub fn relaunch_elevated(extra_args: &[String]) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -80,17 +66,8 @@ pub fn relaunch_elevated(extra_args: &[String]) -> Result<(), String> {
     }
 }
 
-#[cfg(not(windows))]
-pub fn relaunch_elevated(_: &[String]) -> Result<(), String> {
-    Err("unsupported on this platform".into())
-}
-
 // --------------------------------------------------------------- media keys
 
-/// Names accepted by `sys.media`.
-pub const MEDIA_KEYS: [&str; 7] = ["volume_up", "volume_down", "mute", "play_pause", "next", "prev", "stop"];
-
-#[cfg(windows)]
 pub fn media_key(key: &str, times: u32) -> Result<(), String> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
     let vk: u16 = match key {
@@ -119,16 +96,10 @@ pub fn media_key(key: &str, times: u32) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(windows))]
-pub fn media_key(_: &str, _: u32) -> Result<(), String> {
-    Err("unsupported on this platform".into())
-}
-
 // ------------------------------------------------------------ master volume
 
 /// Runs `f` with the default playback device's volume control. Core Audio is
 /// COM, so this initialises COM on the calling (blocking) thread.
-#[cfg(windows)]
 fn with_endpoint<T>(
     f: impl FnOnce(&windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume) -> windows::core::Result<T>,
 ) -> Result<T, String> {
@@ -149,7 +120,6 @@ fn with_endpoint<T>(
 }
 
 /// (level 0–100, muted)
-#[cfg(windows)]
 pub fn volume_get() -> Result<(u32, bool), String> {
     with_endpoint(|v| unsafe {
         let level = v.GetMasterVolumeLevelScalar()?;
@@ -158,7 +128,6 @@ pub fn volume_get() -> Result<(u32, bool), String> {
     })
 }
 
-#[cfg(windows)]
 pub fn volume_set(level: Option<u32>, muted: Option<bool>) -> Result<(u32, bool), String> {
     with_endpoint(|v| unsafe {
         if let Some(l) = level {
@@ -172,30 +141,8 @@ pub fn volume_set(level: Option<u32>, muted: Option<bool>) -> Result<(u32, bool)
     volume_get()
 }
 
-#[cfg(not(windows))]
-pub fn volume_get() -> Result<(u32, bool), String> {
-    Err("unsupported on this platform".into())
-}
-#[cfg(not(windows))]
-pub fn volume_set(_: Option<u32>, _: Option<bool>) -> Result<(u32, bool), String> {
-    Err("unsupported on this platform".into())
-}
+// ------------------------------------------------------------- now playing
 
-// ------------------------------------------------------------ now playing
-
-pub const MEDIA_ACTIONS: [&str; 6] = ["play", "pause", "toggle", "next", "prev", "stop"];
-
-pub struct NowPlaying {
-    pub title: String,
-    pub artist: String,
-    pub album: String,
-    /// closed | opened | changing | stopped | playing | paused
-    pub status: &'static str,
-    /// App that owns the session, e.g. "Spotify.exe".
-    pub app: String,
-}
-
-#[cfg(windows)]
 fn media_session() -> windows::core::Result<Option<windows::Media::Control::GlobalSystemMediaTransportControlsSession>> {
     use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager as Mgr;
     let mgr = Mgr::RequestAsync()?.join()?;
@@ -203,7 +150,6 @@ fn media_session() -> windows::core::Result<Option<windows::Media::Control::Glob
 }
 
 /// The session Windows shows in its media flyout, if any.
-#[cfg(windows)]
 pub fn now_playing() -> Result<Option<NowPlaying>, String> {
     let run = || -> windows::core::Result<Option<NowPlaying>> {
         let Some(s) = media_session()? else { return Ok(None) };
@@ -230,7 +176,6 @@ pub fn now_playing() -> Result<Option<NowPlaying>, String> {
 
 /// Control the current session directly (works even when media keys are
 /// grabbed by another app). Returns whether the app accepted the command.
-#[cfg(windows)]
 pub fn media_control(action: &str) -> Result<bool, String> {
     let run = || -> windows::core::Result<Option<bool>> {
         let Some(s) = media_session()? else { return Ok(None) };
@@ -252,45 +197,9 @@ pub fn media_control(action: &str) -> Result<bool, String> {
     }
 }
 
-#[cfg(not(windows))]
-pub fn now_playing() -> Result<Option<NowPlaying>, String> {
-    Err("unsupported on this platform".into())
-}
-#[cfg(not(windows))]
-pub fn media_control(_: &str) -> Result<bool, String> {
-    Err("unsupported on this platform".into())
-}
-
-/// CPU brand string, e.g. "AMD Ryzen 7 5800X".
-pub fn cpu_model() -> String {
-    use sysinfo::System;
-    let mut sys = System::new();
-    sys.refresh_cpu_all();
-    sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default()
-}
-
 // ---------------------------------------------------------------------- gpu
 
-pub struct Gpu {
-    pub name: String,
-    pub vendor: &'static str,
-    pub vram: u64,
-    pub shared: u64,
-}
-
-fn vendor_name(id: u32) -> &'static str {
-    match id {
-        0x10DE => "NVIDIA",
-        0x1002 | 0x1022 => "AMD",
-        0x8086 => "Intel",
-        0x1414 => "Microsoft",
-        0x5143 => "Qualcomm",
-        _ => "Unknown",
-    }
-}
-
 /// Physical display adapters via DXGI (name, VRAM). Skips the software adapter.
-#[cfg(windows)]
 pub fn gpu_list() -> Vec<Gpu> {
     use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE};
     let mut out = Vec::new();
@@ -315,16 +224,10 @@ pub fn gpu_list() -> Vec<Gpu> {
     out
 }
 
-#[cfg(not(windows))]
-pub fn gpu_list() -> Vec<Gpu> {
-    Vec::new()
-}
-
 /// Total GPU busy % across all engines, sampled over ~`ms`.
 ///
 /// Sums the `GPU Engine \ Utilization Percentage` counters (what Task Manager
 /// shows) and clamps to 100 — the raw sum can exceed it across many engines.
-#[cfg(windows)]
 pub fn gpu_usage(ms: u32) -> Option<f64> {
     use windows_sys::Win32::System::Performance::*;
     let wide: Vec<u16> = "\\GPU Engine(*)\\Utilization Percentage".encode_utf16().chain(Some(0)).collect();
@@ -371,16 +274,8 @@ pub fn gpu_usage(ms: u32) -> Option<f64> {
     }
 }
 
-#[cfg(not(windows))]
-pub fn gpu_usage(_: u32) -> Option<f64> {
-    None
-}
-
 // -------------------------------------------------------------------- power
 
-pub const POWER_ACTIONS: [&str; 6] = ["lock", "sleep", "logoff", "shutdown", "restart", "abort"];
-
-#[cfg(windows)]
 pub fn power(action: &str) -> Result<(), String> {
     let shutdown = |args: &[&str]| {
         std::process::Command::new(r"C:\Windows\System32\shutdown.exe")
@@ -411,20 +306,8 @@ pub fn power(action: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(not(windows))]
-pub fn power(_: &str) -> Result<(), String> {
-    Err("unsupported on this platform".into())
-}
-
 // ------------------------------------------------------------------ battery
 
-pub struct Battery {
-    pub percent: Option<u8>,
-    pub charging: bool,
-    pub on_ac: bool,
-}
-
-#[cfg(windows)]
 pub fn battery() -> Option<Battery> {
     use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
     let mut s: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
@@ -442,15 +325,9 @@ pub fn battery() -> Option<Battery> {
     })
 }
 
-#[cfg(not(windows))]
-pub fn battery() -> Option<Battery> {
-    None
-}
-
 // -------------------------------------------------------------- shell open
 
 /// Open an http(s) URL in the default browser. The caller validates the URL.
-#[cfg(windows)]
 pub fn open_url(url: &str) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -461,15 +338,10 @@ pub fn open_url(url: &str) -> Result<(), String> {
     if r as isize > 32 { Ok(()) } else { Err("could not open URL".into()) }
 }
 
-#[cfg(not(windows))]
-pub fn open_url(url: &str) -> Result<(), String> {
-    std::process::Command::new("xdg-open").arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
-}
-
 /// Show a folder (or select a file) in Explorer.
 pub fn reveal(path: &std::path::Path, select: bool) -> Result<(), String> {
-    let mut cmd = std::process::Command::new(if cfg!(windows) { "explorer.exe" } else { "xdg-open" });
-    if select && cfg!(windows) {
+    let mut cmd = std::process::Command::new("explorer.exe");
+    if select {
         cmd.arg(format!("/select,{}", path.display()));
     } else {
         cmd.arg(path);
@@ -479,14 +351,11 @@ pub fn reveal(path: &std::path::Path, select: bool) -> Result<(), String> {
 
 // ----------------------------------------------------------------- registry
 
-#[cfg(windows)]
 const PROTO_KEY: &str = r"Software\Classes\conduit";
-#[cfg(windows)]
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 /// Register `conduit://` for the current user (no admin needed). The handler
 /// only ever shows the window; URL contents are never executed.
-#[cfg(windows)]
 pub fn set_protocol(on: bool) -> Result<(), String> {
     use winreg::{enums::HKEY_CURRENT_USER, RegKey};
     let hk = RegKey::predef(HKEY_CURRENT_USER);
@@ -507,7 +376,6 @@ pub fn set_protocol(on: bool) -> Result<(), String> {
     cmd.set_value("", &format!("\"{exe}\" --url \"%1\"")).map_err(|e| e.to_string())
 }
 
-#[cfg(windows)]
 pub fn protocol_registered() -> bool {
     use winreg::{enums::HKEY_CURRENT_USER, RegKey};
     RegKey::predef(HKEY_CURRENT_USER)
@@ -517,7 +385,6 @@ pub fn protocol_registered() -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(windows)]
 pub fn set_autostart(on: bool) -> Result<(), String> {
     use winreg::{enums::*, RegKey};
     let k = RegKey::predef(HKEY_CURRENT_USER)
@@ -534,7 +401,6 @@ pub fn set_autostart(on: bool) -> Result<(), String> {
     }
 }
 
-#[cfg(windows)]
 pub fn autostart_enabled() -> bool {
     use winreg::{enums::HKEY_CURRENT_USER, RegKey};
     RegKey::predef(HKEY_CURRENT_USER)
@@ -543,19 +409,9 @@ pub fn autostart_enabled() -> bool {
         .is_ok()
 }
 
-#[cfg(not(windows))]
-pub fn set_protocol(_: bool) -> Result<(), String> { Err("unsupported on this platform".into()) }
-#[cfg(not(windows))]
-pub fn protocol_registered() -> bool { false }
-#[cfg(not(windows))]
-pub fn set_autostart(_: bool) -> Result<(), String> { Err("unsupported on this platform".into()) }
-#[cfg(not(windows))]
-pub fn autostart_enabled() -> bool { false }
-
 /// Release builds use the GUI subsystem; reattach to the launching console so
 /// `--headless` still prints.
 pub fn attach_parent_console() {
-    #[cfg(windows)]
     unsafe {
         use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
         AttachConsole(ATTACH_PARENT_PROCESS);
