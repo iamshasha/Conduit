@@ -521,12 +521,19 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
 
 // ------------------------------------------------------------------ the link
 
-/// `gui\Conduit.Gui.exe` next to our own exe, or `CONDUIT_GUI`.
+/// The GUI window process next to our own exe, or `CONDUIT_GUI`. The filename
+/// differs per platform (WinUI on Windows, GTK on Linux, the Swift app on mac).
 fn gui_exe() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("CONDUIT_GUI") {
         return Some(PathBuf::from(p));
     }
-    Some(std::env::current_exe().ok()?.parent()?.join("gui").join("Conduit.Gui.exe"))
+    #[cfg(windows)]
+    let name = "Conduit.Gui.exe";
+    #[cfg(target_os = "linux")]
+    let name = "conduit-gtk";
+    #[cfg(target_os = "macos")]
+    let name = "conduit-gui";
+    Some(std::env::current_exe().ok()?.parent()?.join("gui").join(name))
 }
 
 struct Link {
@@ -660,9 +667,107 @@ impl Link {
         true
     }
 
-    #[cfg(not(windows))]
+    /// Unix domain socket twin of the named-pipe path above. The connecting
+    /// process must be the child we spawned (checked via `SO_PEERCRED`) and its
+    /// first line must carry the per-launch key.
+    #[cfg(unix)]
     fn start(&self) -> bool {
-        false
+        use tokio::net::UnixListener;
+        let Some(exe) = gui_exe().filter(|p| p.is_file()) else { return false };
+        let token = crate::state::random_token();
+        let key = crate::state::random_token();
+        // A private, user-only directory: XDG_RUNTIME_DIR if set, else temp.
+        let dir = std::env::var("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+        let path = dir.join(format!("conduit-{}.sock", &token[..20]));
+
+        let _guard = self.rt.enter();
+        let _ = std::fs::remove_file(&path); // clear a stale socket
+        let listener = match UnixListener::bind(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[conduit] socket: {e}");
+                return false;
+            }
+        };
+        let s = self.state.settings();
+        let child = match std::process::Command::new(&exe)
+            .args(["--pipe", &path.to_string_lossy(), "--key", &key, "--theme", &s.theme, "--lang", &s.lang])
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[conduit] cannot start {}: {e}", exe.display());
+                let _ = std::fs::remove_file(&path);
+                return false;
+            }
+        };
+        let child_pid = child.id();
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        *self.tx.lock().unwrap() = Some(tx);
+
+        let proxy = self.proxy.clone();
+        let sock_path = path.clone();
+        self.rt.spawn(async move {
+            let mut child = child;
+            let stream = async {
+                let (stream, _) =
+                    tokio::time::timeout(std::time::Duration::from_secs(20), listener.accept()).await.ok()?.ok()?;
+                // Only the process we just launched may talk to us.
+                match stream.peer_cred() {
+                    Ok(c) if c.pid() == Some(child_pid as i32) => Some(stream),
+                    _ => {
+                        eprintln!("[conduit] socket: unexpected client, closing");
+                        None
+                    }
+                }
+            }
+            .await;
+            let Some(stream) = stream else {
+                let _ = child.kill();
+                let _ = std::fs::remove_file(&sock_path);
+                let _ = proxy.send_event(UserEvent::GuiDown);
+                return;
+            };
+            let (r, mut w) = tokio::io::split(stream);
+            let mut lines = BufReader::new(r).lines();
+            let hello: Option<Value> = match lines.next_line().await {
+                Ok(Some(l)) => serde_json::from_str(&l).ok(),
+                _ => None,
+            };
+            let key_ok = hello
+                .as_ref()
+                .filter(|h| h["cmd"] == "hello")
+                .and_then(|h| h["key"].as_str())
+                .map(|k| AppState::eq_ct(k, &key))
+                .unwrap_or(false);
+            if !key_ok {
+                eprintln!("[conduit] socket: bad handshake");
+                let _ = child.kill();
+                let _ = std::fs::remove_file(&sock_path);
+                let _ = proxy.send_event(UserEvent::GuiDown);
+                return;
+            }
+            let _ = proxy.send_event(UserEvent::GuiUp);
+            let writer = tokio::spawn(async move {
+                while let Some(line) = rx.recv().await {
+                    if w.write_all(line.as_bytes()).await.is_err() || w.write_all(b"\n").await.is_err() {
+                        break;
+                    }
+                    let _ = w.flush().await;
+                }
+            });
+            while let Ok(Some(line)) = lines.next_line().await {
+                if line.len() > 1 << 20 {
+                    break;
+                }
+                let _ = proxy.send_event(UserEvent::Gui(line));
+            }
+            writer.abort();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&sock_path);
+            let _ = proxy.send_event(UserEvent::GuiDown);
+        });
+        true
     }
 }
 
