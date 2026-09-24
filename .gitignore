@@ -24,3 +24,7 @@ gui-gtk/target/
 
 # Icon PNGs are rendered from assets/conduit.svg by the packaging scripts.
 assets/conduit-*.png
+
+# Swift build output (the real Strings.json is copied in from gui-winui at build
+# time, overwriting the committed placeholder).
+packaging/macos/ConduitGUI/.build/

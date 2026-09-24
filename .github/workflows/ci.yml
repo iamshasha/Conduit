@@ -31,3 +31,11 @@ jobs:
 
       - name: Test
         run: cargo test --release
+
+  # Compile-check the macOS Swift GUI so it can't drift from the core protocol.
+  macos-gui:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Swift GUI
+        run: ./packaging/macos/build-gui.sh
