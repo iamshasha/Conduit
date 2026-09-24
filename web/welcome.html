@@ -87,15 +87,16 @@
   .note h3{margin:0 0 6px;font-size:16px;font-weight:600}
   .note p{margin:0;color:var(--muted);font-size:14.5px}
 
-  .safety{
-    margin-top:56px;padding:24px;border-radius:var(--radius);
-    border:1px solid var(--card-line);
-    background:linear-gradient(180deg,rgba(139,152,244,.10),rgba(139,152,244,.02));
+  .features{margin-top:64px;display:grid;gap:16px}
+  .feature{
+    padding:28px 26px;border-radius:var(--radius);border:1px solid var(--card-line);
+    background:linear-gradient(180deg,rgba(139,152,244,.09),rgba(139,152,244,.015));
+    position:relative;overflow:hidden;
   }
-  .safety h2{font-size:22px}
-  .safety ul{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:10px}
-  .safety li{display:grid;grid-template-columns:22px 1fr;gap:12px;color:var(--muted);font-size:15px}
-  .safety li svg{width:18px;height:18px;margin-top:3px;flex:none}
+  /* A thin accent channel down the left edge, echoing the app mark. */
+  .feature::before{content:"";position:absolute;left:0;top:22px;bottom:22px;width:3px;border-radius:3px;background:linear-gradient(var(--accent),transparent)}
+  .feature h2{font-size:clamp(21px,3vw,26px);margin:0 0 8px}
+  .feature p{margin:0;color:var(--muted);max-width:62ch;font-size:15.5px}
 
   footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--line);color:var(--faint);font-size:13.5px;display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center}
 
@@ -129,8 +130,8 @@
       <span>Conduit</span>
     </div>
 
-    <h1>A website asks.<br><span class="thin">You decide.</span></h1>
-    <p class="lede">Conduit is a small app that lets a site you approve reach past the browser — to real files, apps, and hardware — but only through a door you open by hand.</p>
+    <h1>Reach past<br><span class="thin">the browser.</span></h1>
+    <p class="lede">Conduit is an app which allows websites to access users' folders, save onto the local device into their designated sandbox and read hardware information directly, while still giving the user maximum controls over the permissions.</p>
 
     <div class="hint"><span class="dot"></span> Click anywhere. Every click sends a signal down the channel.</div>
   </header>
@@ -145,7 +146,7 @@
       </div></div>
       <div class="step"><div class="n"></div><div>
         <h3>A site has to ask, and you answer</h3>
-        <p>The first time a page wants access, a prompt appears. <strong>Deny</strong> is selected by default, and <strong>Allow</strong> only becomes clickable after a moment — so a stray click or a held key can't approve anything. You pick exactly which permissions to grant.</p>
+        <p>The first time a page wants access, a prompt appears. <strong>Deny</strong> is selected by default, and <strong>Allow</strong> only becomes clickable after a moment, so a stray click or a held key can't approve anything. You pick exactly which permissions to grant.</p>
       </div></div>
       <div class="step"><div class="n"></div><div>
         <h3>You stay in control from the dashboard</h3>
@@ -153,7 +154,7 @@
       </div></div>
       <div class="step"><div class="n"></div><div>
         <h3>Connect a project</h3>
-        <p>Building in Scratch or TurboWarp? Load the Conduit extension and your project can save large files, read system stats, and more — each still gated by your consent. The extension URL is on the dashboard's Extension page.</p>
+        <p>Building in Scratch or TurboWarp? Load the Conduit extension and your project can save large files, read system stats, and more, each still gated by your consent. The extension URL is on the dashboard's Extension page.</p>
       </div></div>
     </div>
   </section>
@@ -162,30 +163,27 @@
     <p class="kicker">What a site can ask for</p>
     <h2>Permissions, one at a time</h2>
     <div class="grid2">
-      <div class="note"><h3>Storage</h3><p>Keep real files in a per-site folder — far more room than cookies or local storage, and wiped when you revoke the site.</p></div>
+      <div class="note"><h3>Storage</h3><p>Keep real files in a per-site folder with far more room than cookies or local storage, wiped when you revoke the site.</p></div>
       <div class="note"><h3>Launch apps</h3><p>Open an application by path. You approve each program the first time; Conduit can remember the ones you trust.</p></div>
-      <div class="note"><h3>Hardware &amp; stats</h3><p>Read CPU, memory, GPU, battery, and network figures — the same numbers your system monitor shows.</p></div>
-      <div class="note"><h3>Media, power &amp; clipboard</h3><p>Adjust volume, control playback, read the clipboard, or sleep the machine — each behind its own prompt.</p></div>
+      <div class="note"><h3>Hardware &amp; stats</h3><p>Read CPU, memory, GPU, battery, and network figures, the same numbers your system monitor shows.</p></div>
+      <div class="note"><h3>Media, power &amp; clipboard</h3><p>Adjust volume, control playback, read the clipboard, or sleep the machine, each behind its own prompt.</p></div>
     </div>
   </section>
 
-  <div class="safety">
-    <h2>Built to say no by default</h2>
-    <ul>
-      <li>
-        <svg viewBox="0 0 24 24" fill="none" stroke="#8b98f4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4-3 7-7 9-4-2-7-5-7-9V6z"/></svg>
-        <span>Every capability is off until you turn it on, per site.</span>
-      </li>
-      <li>
-        <svg viewBox="0 0 24 24" fill="none" stroke="#8b98f4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-        <span>The server is bound to your own machine only — a page cannot reach it without a token you granted.</span>
-      </li>
-      <li>
-        <svg viewBox="0 0 24 24" fill="none" stroke="#8b98f4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 1 0-18 0"/><path d="M12 8v4l3 2"/></svg>
-        <span>Revoke access at any time; the site's files and permissions go with it.</span>
-      </li>
-    </ul>
-  </div>
+  <section class="features">
+    <div class="feature">
+      <h2>Safe and Fast</h2>
+      <p>It runs locally on your device unexposed to the internet, so nothing on the internet can access it. It's also designed to be extremely efficient and small. It uses very little memory when idle and sits at 0% CPU usage.</p>
+    </div>
+    <div class="feature">
+      <h2>Your device, you decide.</h2>
+      <p>You can control how much permission you give to each website easily within our dashboard, and even revoke all permissions instantly. When the website asks for permission, you can always choose to allow or reject it.</p>
+    </div>
+    <div class="feature">
+      <h2>Designs and Choices</h2>
+      <p>We chose to use the native UI (WinUI 3 for Windows, GTK for Linux and Swift for Mac) instead of wrapping websites because we hope the app can provide maximum efficiency and the smallest package size on all platforms.</p>
+    </div>
+  </section>
 
   <footer>
     <span>Conduit runs on Windows, macOS, and Linux.</span>
@@ -203,7 +201,7 @@
   let W = 0, H = 0, DPR = 1;
 
   // The aurora is soft, so it's drawn into a small offscreen buffer and scaled
-  // up — a handful of radial fills at ~700px cost almost nothing, and blurry
+  // up (a handful of radial fills at ~700px) cost almost nothing, and blurry
   // gradients upscale without any visible loss. Ripples draw crisp on top.
   const buf = document.createElement("canvas");
   const bctx = buf.getContext("2d", { alpha: false });
@@ -221,7 +219,7 @@
   }
   addEventListener("resize", resize, { passive: true });
 
-  // Slow-drifting light sources — an aurora over near-black. Kept to a handful
+  // Slow-drifting light sources: an aurora over near-black. Kept to a handful
   // so the whole thing stays cheap even on a laptop iGPU.
   const blobs = [
     { hue: 231, x: .28, y: .30, r: .55, ax: .06, ay: .05, px: 0.0, py: 1.2, sp: .00013 },
@@ -293,7 +291,7 @@
     raf = running ? requestAnimationFrame(frame) : 0;
   }
 
-  // Pause when the tab isn't visible — no work while nobody's looking.
+  // Pause when the tab is not visible: no work while nobody is looking.
   document.addEventListener("visibilitychange", () => {
     running = !document.hidden;
     if (running && !raf) raf = requestAnimationFrame(frame);
