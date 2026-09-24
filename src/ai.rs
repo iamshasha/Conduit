@@ -17,6 +17,9 @@ pub fn endpoint(cfg_endpoint: &str) -> String {
 fn agent(secs: u64) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(secs)))
+        // native-tls (Schannel): lets an https AI endpoint work and keeps the
+        // arm64 build free of bundled crypto (ring/aws-lc need clang).
+        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build())
         .build()
         .into()
 }

@@ -30,6 +30,8 @@ pub fn check() -> Value {
         .header("Accept", "application/vnd.github+json")
         .config()
         .timeout_global(Some(Duration::from_secs(10)))
+        // native-tls (Schannel) so the arm64 build needs no bundled crypto.
+        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build())
         .build()
         .call();
 
