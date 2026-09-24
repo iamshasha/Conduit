@@ -189,8 +189,24 @@ pub struct AppState {
     /// Kept between calls so CPU usage is a delta, not a spike.
     pub sys: Mutex<sysinfo::System>,
     pub nets: Mutex<(sysinfo::Networks, Instant)>,
+    /// Signals that cost a process spawn on some platforms (pmset, playerctl,
+    /// pactl, osascript) but change far slower than the ~1.5 s stats tick, so we
+    /// cache them briefly. Null value = force a refresh on the next read.
+    battery_cache: Mutex<(Value, Instant)>,
+    media_cache: Mutex<(Value, Instant)>,
+    volume_cache: Mutex<(Value, Instant)>,
     /// Shared secret for `/activate` (second instance → first instance).
     pub instance_key: String,
+}
+
+/// Return the cached value, or refresh it if stale (or never set).
+fn cached(slot: &Mutex<(Value, Instant)>, ttl: Duration, fresh: impl FnOnce() -> Value) -> Value {
+    let mut c = slot.lock().unwrap();
+    if c.0.is_null() || c.1.elapsed() >= ttl {
+        c.0 = fresh();
+        c.1 = Instant::now();
+    }
+    c.0.clone()
 }
 
 impl AppState {
@@ -227,8 +243,39 @@ impl AppState {
                 s
             }),
             nets: Mutex::new((sysinfo::Networks::new_with_refreshed_list(), Instant::now())),
+            // Null forces a real read on the first request.
+            battery_cache: Mutex::new((Value::Null, Instant::now())),
+            media_cache: Mutex::new((Value::Null, Instant::now())),
+            volume_cache: Mutex::new((Value::Null, Instant::now())),
             instance_key,
         })
+    }
+
+    /// Battery status as JSON, refreshed at most every 10 s. On macOS this saves
+    /// a `pmset` process spawn on every stats tick.
+    pub fn battery_cached(&self, fresh: impl FnOnce() -> Value) -> Value {
+        cached(&self.battery_cache, Duration::from_secs(10), fresh)
+    }
+
+    /// Now-playing JSON, refreshed at most every 3 s (playerctl/osascript spawn).
+    /// A transport action invalidates it so the panel updates promptly.
+    pub fn media_cached(&self, fresh: impl FnOnce() -> Value) -> Value {
+        cached(&self.media_cache, Duration::from_secs(3), fresh)
+    }
+
+    /// Volume JSON, refreshed at most every 3 s (pactl/osascript spawn). A
+    /// volume change invalidates it.
+    pub fn volume_cached(&self, fresh: impl FnOnce() -> Value) -> Value {
+        cached(&self.volume_cache, Duration::from_secs(3), fresh)
+    }
+
+    /// Drop the media/volume caches so the next stats tick re-reads them right
+    /// after the user acts through a control.
+    pub fn invalidate_media(&self) {
+        self.media_cache.lock().unwrap().0 = Value::Null;
+    }
+    pub fn invalidate_volume(&self) {
+        self.volume_cache.lock().unwrap().0 = Value::Null;
     }
 
     pub fn set_ui(&self, sink: UiSink) {

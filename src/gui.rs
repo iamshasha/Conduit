@@ -272,8 +272,14 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
             let tx = link.sender();
             link.rt.spawn_blocking(move || {
                 let mut s = rpc::sys_stats(&st);
-                if let Ok((level, muted)) = system::volume_get() {
-                    s["volume"] = json!({"level": level, "muted": muted});
+                // volume_get / now_playing spawn helper processes on Linux and
+                // macOS; cache them briefly so the fast CPU tick stays cheap.
+                let vol = st.volume_cached(|| match system::volume_get() {
+                    Ok((level, muted)) => json!({"level": level, "muted": muted}),
+                    Err(_) => json!(null),
+                });
+                if !vol.is_null() {
+                    s["volume"] = vol;
                 }
                 if st.settings().detailed {
                     // Always a number (0 when a sample is unavailable) so the
@@ -281,11 +287,11 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                     let u = system::gpu_usage(180).unwrap_or(0.0);
                     s["gpu_usage"] = json!((u * 10.0).round() / 10.0);
                 }
-                s["media"] = match system::now_playing() {
+                s["media"] = st.media_cached(|| match system::now_playing() {
                     Ok(Some(n)) => json!({"present": true, "title": n.title, "artist": n.artist,
                                           "album": n.album, "status": n.status, "app": n.app}),
                     _ => json!({"present": false}),
-                };
+                });
                 if let Some(tx) = tx {
                     let _ = tx.send(json!({"type": "stats", "data": s}).to_string());
                 }
@@ -294,6 +300,7 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         "volume_set" => {
             let level = msg["level"].as_f64().map(|l| l.clamp(0.0, 100.0).round() as u32);
             let muted = msg["muted"].as_bool();
+            state.invalidate_volume();
             let tx = link.sender();
             link.rt.spawn_blocking(move || {
                 let r = system::volume_set(level, muted);
@@ -305,6 +312,7 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         "media_control" => {
             let action = msg["action"].as_str().unwrap_or("").to_string();
             if system::MEDIA_ACTIONS.contains(&action.as_str()) {
+                state.invalidate_media();
                 let tx = link.sender();
                 link.rt.spawn_blocking(move || {
                     if let (Some(tx), Err(e)) = (tx, system::media_control(&action)) {

@@ -723,7 +723,7 @@ pub fn sys_stats(state: &AppState) -> Value {
         "net_rx": rx,
         "net_tx": tx,
         "uptime": sysinfo::System::uptime(),
-        "battery": battery_json(),
+        "battery": state.battery_cached(battery_json),
     })
 }
 

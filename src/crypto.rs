@@ -58,8 +58,9 @@ pub fn encrypt(data_dir: &Path, origin: &str, password: Option<&str>, plaintext:
     use rand::RngCore;
     let mut nonce = [0u8; 12];
     rand::rngs::OsRng.fill_bytes(&mut nonce);
+    let n = Nonce::try_from(nonce.as_slice()).map_err(|_| "bad nonce".to_string())?;
     let ct = cipher
-        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .encrypt(&n, plaintext)
         .map_err(|_| "encryption failed".to_string())?;
     let mut out = nonce.to_vec();
     out.extend_from_slice(&ct);
@@ -73,8 +74,9 @@ pub fn decrypt(data_dir: &Path, origin: &str, password: Option<&str>, token: &st
     }
     let (nonce, ct) = raw.split_at(12);
     let cipher = Aes256Gcm::new_from_slice(&key(data_dir, origin, password)).map_err(|e| e.to_string())?;
+    let n = Nonce::try_from(nonce).map_err(|_| "wrong key or corrupted data".to_string())?;
     cipher
-        .decrypt(Nonce::from_slice(nonce), ct)
+        .decrypt(&n, ct)
         .map_err(|_| "wrong key or corrupted data".to_string())
 }
 
