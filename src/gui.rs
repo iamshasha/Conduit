@@ -533,7 +533,14 @@ fn gui_exe() -> Option<PathBuf> {
     let name = "conduit-gtk";
     #[cfg(target_os = "macos")]
     let name = "conduit-gui";
-    Some(std::env::current_exe().ok()?.parent()?.join("gui").join(name))
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    // A portable layout keeps the GUI in a `gui/` subfolder; a system install
+    // (e.g. a .deb into /usr/bin) puts it right next to the core.
+    let sibling = dir.join(name);
+    if sibling.is_file() {
+        return Some(sibling);
+    }
+    Some(dir.join("gui").join(name))
 }
 
 struct Link {
