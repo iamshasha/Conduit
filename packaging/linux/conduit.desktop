@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Conduit
+GenericName=Web-to-system bridge
+Comment=Let approved websites do sandboxed native things, each gated by consent
+Exec=conduit --url %u
+Icon=conduit
+Terminal=false
+Categories=Utility;Network;Security;
+Keywords=sandbox;bridge;websocket;consent;hardware;
+StartupNotify=true
+StartupWMClass=com.conduit.gtk
+MimeType=x-scheme-handler/conduit;

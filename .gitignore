@@ -18,3 +18,9 @@ Thumbs.db
 
 # GTK GUI build
 gui-gtk/target/
+
+# Packaged installers (built by CI / packaging scripts)
+/dist/
+
+# Icon PNGs are rendered from assets/conduit.svg by the packaging scripts.
+assets/conduit-*.png
