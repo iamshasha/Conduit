@@ -44,6 +44,7 @@ use std::sync::Arc;
 const EXTENSION_JS: &str = include_str!("../extension/conduit.js");
 const TEST_PAGE: &str = include_str!("../web/test.html");
 const TW_TEST_PAGE: &str = include_str!("../web/tw-test.html");
+const WELCOME_PAGE: &str = include_str!("../web/welcome.html");
 
 pub struct Opts {
     pub cfg: Config,
@@ -94,9 +95,31 @@ fn main() {
     if opts.headless {
         rt.block_on(serve(state, listener));
     } else {
+        // The actual port (may differ from cfg when --port 0 picked a free one).
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or(opts.cfg.port);
+        maybe_open_welcome(&state, port);
         let show = !opts.minimized || opts.url.is_some();
         gui::run(state, rt, listener, show);
     }
+}
+
+/// On the very first launch, open the onboarding page in the default browser.
+/// A marker in the data dir makes this happen exactly once; the page stays
+/// reachable at /welcome afterwards.
+fn maybe_open_welcome(state: &Arc<AppState>, port: u16) {
+    let marker = state.cfg.data_dir.join("welcome.seen");
+    if marker.exists() {
+        return;
+    }
+    if std::fs::write(&marker, b"1").is_err() {
+        return; // can't record it — better to skip than to nag on every start
+    }
+    let url = format!("http://127.0.0.1:{port}/welcome");
+    std::thread::spawn(move || {
+        // Give the server a moment to accept connections first.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let _ = system::open_url(&url);
+    });
 }
 
 /// Bind the loopback port, optionally waiting for a previous instance (the
@@ -147,6 +170,7 @@ pub async fn serve(state: Arc<AppState>, listener: std::net::TcpListener) {
         .route("/turbowarp/extension.js", get(extension_js))
         .route("/test", get(test_page))
         .route("/test/extension", get(tw_test_page))
+        .route("/welcome", get(welcome_page))
         .layer(DefaultBodyLimit::max(48 * 1024 * 1024))
         .with_state(state.clone());
 
@@ -402,6 +426,14 @@ async fn tw_test_page() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))],
         TW_TEST_PAGE,
+    )
+}
+
+/// The first-run onboarding page (also reachable any time from the dashboard).
+async fn welcome_page() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))],
+        WELCOME_PAGE,
     )
 }
 
