@@ -169,7 +169,9 @@
   "size_custom": "Custom limit",
   "size_set": "Set limit",
   "size_clear": "Use default",
-  "size_mb": "Limit (MB)"
+  "size_mb": "Limit (MB)",
+  "remember": "Remember this choice",
+  "consent_power": "Wants to run a power action:"
  },
  "es": {
   "_name": "Español",
@@ -341,7 +343,9 @@
   "size_set": "Establecer límite",
   "size_clear": "Usar predeterminado",
   "size_mb": "Límite (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Recordar esta elección",
+  "consent_power": "Quiere ejecutar una acción de energía:"
  },
  "pt": {
   "_name": "Português",
@@ -513,7 +517,9 @@
   "size_set": "Definir limite",
   "size_clear": "Usar padrão",
   "size_mb": "Limite (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Lembrar esta escolha",
+  "consent_power": "Quer executar uma ação de energia:"
  },
  "fr": {
   "_name": "Français",
@@ -685,7 +691,9 @@
   "size_set": "Définir la limite",
   "size_clear": "Utiliser la valeur par défaut",
   "size_mb": "Limite (Mo)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Se souvenir de ce choix",
+  "consent_power": "Veut exécuter une action d’alimentation :"
  },
  "de": {
   "_name": "Deutsch",
@@ -857,7 +865,9 @@
   "size_set": "Limit festlegen",
   "size_clear": "Standard verwenden",
   "size_mb": "Limit (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Diese Wahl merken",
+  "consent_power": "Möchte eine Energieaktion ausführen:"
  },
  "it": {
   "_name": "Italiano",
@@ -1029,7 +1039,9 @@
   "size_set": "Imposta limite",
   "size_clear": "Usa predefinito",
   "size_mb": "Limite (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Ricorda questa scelta",
+  "consent_power": "Vuole eseguire un’azione di alimentazione:"
  },
  "nl": {
   "_name": "Nederlands",
@@ -1201,7 +1213,9 @@
   "size_set": "Limiet instellen",
   "size_clear": "Standaard gebruiken",
   "size_mb": "Limiet (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Deze keuze onthouden",
+  "consent_power": "Wil een energieactie uitvoeren:"
  },
  "ru": {
   "_name": "Русский",
@@ -1373,7 +1387,9 @@
   "size_set": "Задать лимит",
   "size_clear": "Использовать по умолчанию",
   "size_mb": "Лимит (МБ)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Запомнить выбор",
+  "consent_power": "Хочет выполнить действие питания:"
  },
  "uk": {
   "_name": "Українська",
@@ -1545,7 +1561,9 @@
   "size_set": "Задати ліміт",
   "size_clear": "Використати за замовчуванням",
   "size_mb": "Ліміт (МБ)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Запам’ятати вибір",
+  "consent_power": "Хоче виконати дію живлення:"
  },
  "pl": {
   "_name": "Polski",
@@ -1717,7 +1735,9 @@
   "size_set": "Ustaw limit",
   "size_clear": "Użyj domyślnego",
   "size_mb": "Limit (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Zapamiętaj ten wybór",
+  "consent_power": "Chce wykonać akcję zasilania:"
  },
  "tr": {
   "_name": "Türkçe",
@@ -1889,7 +1909,9 @@
   "size_set": "Sınır belirle",
   "size_clear": "Varsayılanı kullan",
   "size_mb": "Sınır (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Bu seçimi hatırla",
+  "consent_power": "Bir güç eylemi çalıştırmak istiyor:"
  },
  "ar": {
   "_name": "العربية",
@@ -2062,7 +2084,9 @@
   "size_set": "تعيين الحد",
   "size_clear": "استخدام الافتراضي",
   "size_mb": "الحد (ميغابايت)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "تذكّر هذا الاختيار",
+  "consent_power": "يريد تنفيذ إجراء طاقة:"
  },
  "he": {
   "_name": "עברית",
@@ -2235,7 +2259,9 @@
   "size_set": "קבע מגבלה",
   "size_clear": "השתמש בברירת המחדל",
   "size_mb": "מגבלה (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "זכור בחירה זו",
+  "consent_power": "רוצה לבצע פעולת צריכת חשמל:"
  },
  "hi": {
   "_name": "हिन्दी",
@@ -2407,7 +2433,9 @@
   "size_set": "सीमा सेट करें",
   "size_clear": "डिफ़ॉल्ट उपयोग करें",
   "size_mb": "सीमा (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "यह विकल्प याद रखें",
+  "consent_power": "एक पावर क्रिया चलाना चाहता है:"
  },
  "ja": {
   "_name": "日本語",
@@ -2579,7 +2607,9 @@
   "size_set": "上限を設定",
   "size_clear": "既定を使用",
   "size_mb": "上限 (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "この選択を記憶する",
+  "consent_power": "電源操作を実行しようとしています:"
  },
  "ko": {
   "_name": "한국어",
@@ -2751,7 +2781,9 @@
   "size_set": "한도 설정",
   "size_clear": "기본값 사용",
   "size_mb": "한도 (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "이 선택 기억",
+  "consent_power": "전원 작업을 실행하려고 합니다:"
  },
  "zh-Hans": {
   "_name": "简体中文",
@@ -2923,7 +2955,9 @@
   "size_set": "设置上限",
   "size_clear": "使用默认",
   "size_mb": "上限（MB）",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "记住此选择",
+  "consent_power": "想要执行电源操作："
  },
  "zh-Hant": {
   "_name": "繁體中文",
@@ -3095,7 +3129,9 @@
   "size_set": "設定上限",
   "size_clear": "使用預設",
   "size_mb": "上限（MB）",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "記住此選擇",
+  "consent_power": "想要執行電源操作："
  },
  "id": {
   "_name": "Bahasa Indonesia",
@@ -3267,7 +3303,9 @@
   "size_set": "Setel batas",
   "size_clear": "Gunakan bawaan",
   "size_mb": "Batas (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Ingat pilihan ini",
+  "consent_power": "Ingin menjalankan aksi daya:"
  },
  "vi": {
   "_name": "Tiếng Việt",
@@ -3439,6 +3477,8 @@
   "size_set": "Đặt giới hạn",
   "size_clear": "Dùng mặc định",
   "size_mb": "Giới hạn (MB)",
-  "app": "Conduit"
+  "app": "Conduit",
+  "remember": "Ghi nhớ lựa chọn này",
+  "consent_power": "Muốn chạy một thao tác nguồn:"
  }
 }

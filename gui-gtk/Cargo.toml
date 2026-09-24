@@ -1,0 +1,26 @@
+[package]
+name = "conduit-gtk"
+version = "0.1.0"
+edition = "2021"
+
+# The Linux window process for Conduit. Launched on demand by the core over a
+# Unix domain socket (path in --pipe), authenticated with --key. Separate crate
+# so the core never pulls GTK4.
+
+[[bin]]
+name = "conduit-gtk"
+path = "src/main.rs"
+
+[dependencies]
+# 0.6 targets GTK 4.6 (Ubuntu 22.04); it also builds against newer GTK on CI.
+gtk = { package = "gtk4", version = "0.6" }
+glib = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-channel = "2"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
