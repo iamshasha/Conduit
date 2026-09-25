@@ -77,6 +77,134 @@ pub fn status(base: &str) -> Value {
     json!({"online": false, "endpoint": base, "models": []})
 }
 
+/// Default model pulled by the one-key setup when the user names none. Small
+/// enough to fetch quickly, capable enough to be useful.
+pub const DEFAULT_MODEL: &str = "llama3.2";
+
+/// Official Ollama Windows installer. Pinned to the vendor's HTTPS host.
+#[cfg(windows)]
+const OLLAMA_SETUP_URL: &str = "https://ollama.com/download/OllamaSetup.exe";
+
+/// One-key "get me a local model" flow: make sure Ollama is running (install it
+/// on Windows if absent), then pull `model`. `on_event` receives UI-ready JSON
+/// (`{"stage": ..., "pct": 0..=100, ...}`) as each phase progresses.
+///
+/// Downloading and running a vendor installer is a heavy, user-initiated action;
+/// it only runs when the user clicks the button, and the installer URL is pinned.
+pub fn setup(base: &str, model: &str, on_event: &dyn Fn(Value)) -> Result<(), String> {
+    let base = endpoint(base);
+    let model = if model.trim().is_empty() { DEFAULT_MODEL } else { model.trim() };
+
+    // Already up? Skip straight to the model pull.
+    let online = get(&format!("{base}/api/tags"), 3).is_ok();
+    if !online {
+        #[cfg(windows)]
+        {
+            install_ollama(on_event)?;
+            wait_online(&base, on_event)?;
+        }
+        #[cfg(not(windows))]
+        {
+            return Err("start Ollama first (ollama.com/download)".into());
+        }
+    }
+
+    on_event(json!({"stage": "pull", "model": model, "pct": 0}));
+    pull(&base, model, on_event)?;
+    on_event(json!({"stage": "done", "model": model}));
+    Ok(())
+}
+
+/// Download the Ollama installer (reporting download percent) and run it
+/// silently, waiting for it to finish.
+#[cfg(windows)]
+fn install_ollama(on_event: &dyn Fn(Value)) -> Result<(), String> {
+    use std::io::{Read, Write};
+    on_event(json!({"stage": "download", "pct": 0}));
+
+    let mut resp = agent(600).get(OLLAMA_SETUP_URL).call().map_err(|e| friendly(&e))?;
+    let total: u64 = resp
+        .headers()
+        .get("content-length")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let path = std::env::temp_dir().join("OllamaSetup.exe");
+    let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+    let mut reader = resp.body_mut().as_reader();
+    let mut buf = [0u8; 64 * 1024];
+    let mut done: u64 = 0;
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        done += n as u64;
+        if total > 0 {
+            on_event(json!({"stage": "download", "pct": (done * 100 / total).min(100)}));
+        }
+    }
+    drop(file);
+
+    on_event(json!({"stage": "install"}));
+    // Inno Setup silent switches: no UI, no prompts, no reboot.
+    let status = std::process::Command::new(&path)
+        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err("the Ollama installer did not complete".into());
+    }
+    Ok(())
+}
+
+/// Poll the endpoint until Ollama's server answers (it starts itself after
+/// install), up to ~60s.
+#[cfg(windows)]
+fn wait_online(base: &str, on_event: &dyn Fn(Value)) -> Result<(), String> {
+    on_event(json!({"stage": "starting"}));
+    for _ in 0..30 {
+        if get(&format!("{base}/api/tags"), 3).is_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    Err("Ollama was installed but its server did not start".into())
+}
+
+/// Stream a model pull from Ollama, forwarding download percent. Ollama returns
+/// newline-delimited JSON objects carrying `completed`/`total` byte counts.
+fn pull(base: &str, model: &str, on_event: &dyn Fn(Value)) -> Result<(), String> {
+    use std::io::{BufRead, BufReader};
+    let resp = agent(3600)
+        .post(&format!("{base}/api/pull"))
+        .send_json(json!({"model": model, "stream": true}))
+        .map_err(|e| friendly(&e))?;
+    let reader = BufReader::new(resp.into_body().into_reader());
+    for line in reader.lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(err) = v["error"].as_str() {
+            return Err(err.to_string());
+        }
+        let (completed, total) = (v["completed"].as_u64(), v["total"].as_u64());
+        let pct = match (completed, total) {
+            (Some(c), Some(t)) if t > 0 => (c * 100 / t).min(100),
+            _ => continue,
+        };
+        on_event(json!({"stage": "pull", "model": model, "pct": pct}));
+    }
+    Ok(())
+}
+
 /// One-shot completion. `model` required; `prompt` required; `system` optional.
 pub fn generate(base: &str, model: &str, prompt: &str, system: Option<&str>) -> Result<String, String> {
     let base = endpoint(base);

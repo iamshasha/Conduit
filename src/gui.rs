@@ -381,6 +381,30 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                 }
             });
         }
+        // One-key: install a local model runner if needed and pull a model,
+        // streaming progress. Heavy and user-initiated (downloads/installs a
+        // vendor runtime), so it runs off the UI thread.
+        "ai_setup" => {
+            let base = state.settings().ai_endpoint;
+            let model = msg["model"].as_str().unwrap_or("").to_string();
+            let tx = link.sender();
+            link.rt.spawn_blocking(move || {
+                let emit = |v: Value| {
+                    if let Some(t) = &tx {
+                        let _ = t.send(json!({"type": "ai_setup", "data": v}).to_string());
+                    }
+                };
+                match crate::ai::setup(&base, &model, &emit) {
+                    Ok(()) => {
+                        // Refresh the model list now that a model is present.
+                        if let Some(t) = &tx {
+                            let _ = t.send(json!({"type": "ai_status", "data": crate::ai::status(&base)}).to_string());
+                        }
+                    }
+                    Err(e) => emit(json!({"stage": "error", "error": e})),
+                }
+            });
+        }
         "set_quota" => {
             let q = msg["bytes"].as_u64();
             state.set_site_quota(origin, q);
@@ -424,6 +448,32 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
             link.rt.spawn_blocking(move || {
                 if let Some(tx) = tx {
                     let _ = tx.send(json!({"type": "update", "data": crate::update::check()}).to_string());
+                }
+            });
+        }
+        // Download and apply the update in place (Velopack, Windows only). On
+        // success the process restarts and never gets here; failures come back
+        // as an "update_error" toast so the UI can leave the link as a fallback.
+        "install_update" => {
+            let tx = link.sender();
+            link.rt.spawn_blocking(move || {
+                #[cfg(windows)]
+                {
+                    let prog = tx.clone();
+                    let send_progress = move |pct: i16| {
+                        if let Some(t) = &prog {
+                            let _ = t.send(json!({"type": "update_progress", "data": pct}).to_string());
+                        }
+                    };
+                    if let Err(e) = crate::update::install::run(send_progress) {
+                        if let Some(t) = &tx {
+                            let _ = t.send(json!({"type": "update_error", "data": e}).to_string());
+                        }
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = &tx; // non-Windows uses the release link instead
                 }
             });
         }

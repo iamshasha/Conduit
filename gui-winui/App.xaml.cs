@@ -112,11 +112,20 @@ public partial class App : Application
             case "update":
                 _main?.ShowUpdate(data!);
                 break;
+            case "update_progress":
+                _main?.UpdateProgress((int)(data?.GetValue<double>() ?? 0));
+                break;
+            case "update_error":
+                _main?.UpdateError(data?.GetValue<string>() ?? "");
+                break;
             case "browse":
                 _main?.ShowBrowse(data!);
                 break;
             case "ai_status":
                 _main?.ShowAiStatus(data!);
+                break;
+            case "ai_setup":
+                _main?.ShowAiSetup(data!);
                 break;
             case "ai_result":
                 _main?.ShowAiResult(data!);

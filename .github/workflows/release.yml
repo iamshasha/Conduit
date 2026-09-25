@@ -61,7 +61,6 @@ jobs:
             --packDir stage-x64 `
             --mainExe conduit.exe `
             --icon gui-winui/app.ico `
-            --channel win-x64 `
             --outputDir dist
 
       - uses: actions/upload-artifact@v4

@@ -324,20 +324,40 @@ static class Ui
     }
 
     static readonly string[] AccentKeys =
-        ["AccentFillColorDefaultBrush", "AccentFillColorSecondaryBrush", "AccentFillColorTertiaryBrush", "SystemColorControlAccentBrush"];
+        ["AccentFillColorDefaultBrush", "AccentFillColorSecondaryBrush", "AccentFillColorTertiaryBrush", "SystemColorControlAccentBrush",
+         // Informational InfoBars (update/AI status) tint their icon with this.
+         "InfoBarInformationalSeverityIconBackground"];
+    // Colours the framework derives control accents from (toggle switches,
+    // sliders, check boxes, radio buttons, the NavigationView selection bar).
+    // Setting the whole family, not just the brushes, is what makes those
+    // controls follow the chosen accent.
+    static readonly string[] AccentColorKeys =
+        ["SystemAccentColor", "SystemAccentColorLight1", "SystemAccentColorLight2", "SystemAccentColorLight3",
+         "SystemAccentColorDark1", "SystemAccentColorDark2", "SystemAccentColorDark3"];
     static Dictionary<string, object?>? _accentDefaults;
 
-    /// Override the accent brushes the UI uses (buttons, graph, bars). Best-effort:
-    /// a malformed hex leaves the system accent untouched. The first call snapshots
-    /// the OS defaults so switching back to a plain theme can restore them.
+    /// Override the accent brushes and colour family the UI uses (buttons, graph,
+    /// toggles, sliders, check boxes, nav selection). Best-effort: a malformed hex
+    /// leaves the system accent untouched. The first call snapshots the OS defaults
+    /// so switching back to a plain theme can restore them.
     public static void ApplyAccent(string hex)
     {
         if (!TryColor(hex, out var c)) return;
         var res = Application.Current.Resources;
-        _accentDefaults ??= AccentKeys.Append("SystemAccentColor").ToDictionary(k => k, k => res.TryGetValue(k, out var v) ? v : null);
+        _accentDefaults ??= AccentKeys.Concat(AccentColorKeys).ToDictionary(k => k, k => res.TryGetValue(k, out var v) ? v : null);
         var brush = new SolidColorBrush(c);
         foreach (var key in AccentKeys) res[key] = brush;
+        // Base plus three lighter and three darker shades, as the framework expects.
         res["SystemAccentColor"] = c;
+        res["SystemAccentColorLight1"] = Shade(c, 0.30); res["SystemAccentColorLight2"] = Shade(c, 0.50); res["SystemAccentColorLight3"] = Shade(c, 0.70);
+        res["SystemAccentColorDark1"] = Shade(c, -0.20); res["SystemAccentColorDark2"] = Shade(c, -0.40); res["SystemAccentColorDark3"] = Shade(c, -0.60);
+    }
+
+    /// Lighten (t &gt; 0, toward white) or darken (t &lt; 0, toward black) a colour.
+    static Windows.UI.Color Shade(Windows.UI.Color c, double t)
+    {
+        byte Mix(byte v) => (byte)Math.Clamp(t >= 0 ? v + (255 - v) * t : v * (1 + t), 0, 255);
+        return Windows.UI.Color.FromArgb(c.A, Mix(c.R), Mix(c.G), Mix(c.B));
     }
 
     /// Put the OS accent back after a preset/custom theme is deselected.

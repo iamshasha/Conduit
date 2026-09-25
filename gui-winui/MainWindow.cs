@@ -924,6 +924,9 @@ sealed class MainWindow : Window
     TextBox? _aiOut;
     Button? _aiRun;
     InfoBar? _aiStatus;
+    Button? _aiSetup;
+    ProgressBar? _aiSetupBar;
+    TextBlock? _aiSetupText;
 
     FrameworkElement AiPage()
     {
@@ -947,6 +950,21 @@ sealed class MainWindow : Window
         _aiStatus = new InfoBar { IsClosable = false, IsOpen = true, Severity = InfoBarSeverity.Informational,
             Title = Loc.T("checking"), Margin = new Thickness(0, 12, 0, 12) };
         col.Children.Add(_aiStatus);
+
+        // One-key: install Ollama (if missing) and pull a model.
+        _aiSetup = new Button { Content = Loc.T("ai_setup"), Style = Ui.S("AccentButtonStyle") };
+        _aiSetup.Click += (_, _) =>
+        {
+            _aiSetup!.IsEnabled = false;
+            if (_aiSetupBar is not null) _aiSetupBar.Visibility = Visibility.Visible;
+            if (_aiSetupText is not null) { _aiSetupText.Visibility = Visibility.Visible; _aiSetupText.Text = Loc.T("ai_setup_checking"); }
+            Core.Cmd("ai_setup");
+        };
+        _aiSetupBar = new ProgressBar { IsIndeterminate = true, Minimum = 0, Maximum = 100, Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
+        _aiSetupText = Ui.Secondary("");
+        _aiSetupText.Visibility = Visibility.Collapsed;
+        col.Children.Add(Card("", Loc.T("ai_setup"), Loc.T("ai_setup_hint"),
+            new StackPanel { Children = { _aiSetup, _aiSetupBar, _aiSetupText } }));
 
         _aiModel = new ComboBox { MinWidth = 260, IsEnabled = false };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_aiModel, Loc.T("ai_model"));
@@ -1010,6 +1028,49 @@ sealed class MainWindow : Window
             _aiModel.IsEnabled = models.Count > 0;
         }
         if (_aiRun is not null) _aiRun.IsEnabled = models.Count > 0;
+        // A status refresh follows a completed setup; restore the button and
+        // hide the progress row.
+        if (_aiSetup is not null) _aiSetup.IsEnabled = true;
+        if (online)
+        {
+            if (_aiSetupBar is not null) _aiSetupBar.Visibility = Visibility.Collapsed;
+            if (_aiSetupText is not null) _aiSetupText.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    /// Progress from the one-key AI setup (download → install → pull → error).
+    public void ShowAiSetup(JsonNode d)
+    {
+        if (_page != "ai" || _aiSetupBar is null || _aiSetupText is null) return;
+        var stage = d["stage"]?.GetValue<string>() ?? "";
+        _aiSetupBar.Visibility = Visibility.Visible;
+        _aiSetupText.Visibility = Visibility.Visible;
+        switch (stage)
+        {
+            case "download":
+                _aiSetupBar.IsIndeterminate = false;
+                _aiSetupBar.Value = d["pct"]?.GetValue<double>() ?? 0;
+                _aiSetupText.Text = Loc.T("ai_setup_downloading", ("pct", (int)(d["pct"]?.GetValue<double>() ?? 0)));
+                break;
+            case "install":
+                _aiSetupBar.IsIndeterminate = true;
+                _aiSetupText.Text = Loc.T("ai_setup_installing");
+                break;
+            case "starting":
+                _aiSetupBar.IsIndeterminate = true;
+                _aiSetupText.Text = Loc.T("ai_setup_starting");
+                break;
+            case "pull":
+                _aiSetupBar.IsIndeterminate = false;
+                _aiSetupBar.Value = d["pct"]?.GetValue<double>() ?? 0;
+                _aiSetupText.Text = Loc.T("ai_setup_pulling", ("pct", (int)(d["pct"]?.GetValue<double>() ?? 0)));
+                break;
+            case "error":
+                _aiSetupBar.Visibility = Visibility.Collapsed;
+                _aiSetupText.Text = Loc.T("ai_setup_failed", ("reason", d["error"]?.GetValue<string>() ?? ""));
+                if (_aiSetup is not null) _aiSetup.IsEnabled = true;
+                break;
+        }
     }
 
     public void ShowAiResult(JsonNode d)
@@ -1191,10 +1252,19 @@ sealed class MainWindow : Window
         }
         else if (d["update_available"]?.GetValue<bool>() == true)
         {
+            _updateInfo.Content = null;
             _updateInfo.Severity = InfoBarSeverity.Success;
             _updateInfo.Title = Loc.T("update_ready", ("latest", d["latest"]?.GetValue<string>() ?? ""));
             var url = d["url"]?.GetValue<string>() ?? "";
-            if (!string.IsNullOrEmpty(url))
+            // Velopack-installed builds download and apply in place; everything
+            // else falls back to opening the release page.
+            if (d["self_update"]?.GetValue<bool>() == true)
+            {
+                var b = new Button { Content = Loc.T("install_update"), Style = Ui.S("AccentButtonStyle") };
+                b.Click += (_, _) => BeginInstall();
+                _updateInfo.ActionButton = b;
+            }
+            else if (!string.IsNullOrEmpty(url))
             {
                 var b = new Button { Content = Loc.T("get_update") };
                 b.Click += (_, _) => Core.Cmd("open_url", new JsonObject { ["url"] = url });
@@ -1206,6 +1276,40 @@ sealed class MainWindow : Window
             _updateInfo.Severity = InfoBarSeverity.Informational;
             _updateInfo.Title = Loc.T("up_to_date", ("version", d["current"]?.GetValue<string>() ?? ""));
         }
+    }
+
+    ProgressBar? _updateBar;
+
+    /// Kick off the in-place download+install and swap the InfoBar into a
+    /// progress state (an accent progress bar the update animation rides on).
+    void BeginInstall()
+    {
+        if (_updateInfo is null) return;
+        _updateInfo.ActionButton = null;
+        _updateInfo.Severity = InfoBarSeverity.Informational;
+        _updateInfo.Title = Loc.T("update_downloading");
+        _updateBar = new ProgressBar { IsIndeterminate = true, Minimum = 0, Maximum = 100, Margin = new Thickness(0, 8, 0, 4) };
+        _updateInfo.Content = _updateBar;
+        Core.Cmd("install_update");
+    }
+
+    /// Percentages from the core's download. 100 means the swap-and-restart is
+    /// imminent, so the process is about to be replaced.
+    public void UpdateProgress(int pct)
+    {
+        if (_updateInfo is null || _updateBar is null) return;
+        _updateBar.IsIndeterminate = false;
+        _updateBar.Value = Math.Clamp(pct, 0, 100);
+        _updateInfo.Title = pct >= 100 ? Loc.T("update_installing") : Loc.T("update_downloading_pct", ("pct", pct));
+    }
+
+    public void UpdateError(string reason)
+    {
+        if (_updateInfo is null) return;
+        _updateInfo.Content = null;
+        _updateBar = null;
+        _updateInfo.Severity = InfoBarSeverity.Warning;
+        _updateInfo.Title = Loc.T("update_failed", ("reason", reason));
     }
 
     /// Coarse "time left" for a grant's expiry label.
