@@ -59,6 +59,12 @@ pub struct Opts {
 }
 
 fn main() {
+    // Velopack's lifecycle hook must run before anything else: on Windows it
+    // handles the installer's post-install / update / uninstall callbacks and may
+    // restart or exit the process. A no-op during normal launches.
+    #[cfg(windows)]
+    velopack::VelopackApp::build().run();
+
     let opts = match parse_args() {
         Ok(o) => o,
         Err(e) => {

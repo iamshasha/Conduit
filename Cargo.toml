@@ -28,6 +28,8 @@ zip = { version = "2", default-features = false, features = ["deflate", "time"] 
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_Security", "Win32_System_Threading", "Win32_System_Power", "Win32_System_Shutdown", "Win32_System_Console", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Pipes", "Win32_System_Performance"] }
 winreg = "0.56.0"
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Media_Control", "Foundation", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
+# Windows installer + self-update. The startup hook must run first in main().
+velopack = "1.2"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["blocking", "json"] }

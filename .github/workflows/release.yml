@@ -12,48 +12,91 @@ permissions:
   contents: write
 
 jobs:
-  # ---------------------------------------------------------------- Windows
-  windows:
+  # -------------------------------------------------- Windows x64 (Velopack)
+  # The primary Windows installer: a Velopack Setup.exe plus the update feed
+  # (RELEASES/*.nupkg) that the app's built-in updater reads.
+  windows-x64:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            rust: x86_64-pc-windows-msvc
-            rid: win-x64
-          - arch: arm64
-            rust: aarch64-pc-windows-msvc
-            rid: win-arm64
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust }}
-
+          targets: x86_64-pc-windows-msvc
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
 
       - name: Build core
-        run: cargo build --release --target ${{ matrix.rust }}
+        run: cargo build --release --target x86_64-pc-windows-msvc
 
       - name: Publish GUI
-        run: dotnet publish gui-winui -c Release -r ${{ matrix.rid }} -o gui-winui/publish
+        run: dotnet publish gui-winui -c Release -r win-x64 -o gui-winui/publish
 
-      - name: Assemble
+      - name: Read version
+        id: ver
         shell: pwsh
         run: |
-          $out = "Conduit-${{ matrix.arch }}"
-          New-Item -ItemType Directory -Force "$out/gui" | Out-Null
-          Copy-Item "target/${{ matrix.rust }}/release/conduit.exe" "$out/"
-          Copy-Item "gui-winui/publish/*" "$out/gui/" -Recurse
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Stage payload
+        shell: pwsh
+        run: |
+          $stage = "stage-x64"
+          New-Item -ItemType Directory -Force "$stage/gui" | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/conduit.exe" "$stage/"
+          Copy-Item "gui-winui/publish/*" "$stage/gui/" -Recurse
+
+      - name: Velopack pack
+        shell: pwsh
+        run: |
+          dotnet tool install -g vpk
+          $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
           New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path "$out/*" -DestinationPath "dist/Conduit-${{ matrix.arch }}.zip" -Force
+          vpk pack `
+            --packId Conduit `
+            --packTitle Conduit `
+            --packAuthors Conduit `
+            --packVersion ${{ steps.ver.outputs.version }} `
+            --packDir stage-x64 `
+            --mainExe conduit.exe `
+            --icon gui-winui/app.ico `
+            --channel win-x64 `
+            --outputDir dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-${{ matrix.arch }}
+          name: windows-x64
+          path: dist/*
+
+  # ----------------------------------------------- Windows arm64 (portable)
+  # Velopack's arm64 story is still thin, so arm64 ships as a portable zip.
+  windows-arm64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Build core
+        run: cargo build --release --target aarch64-pc-windows-msvc
+      - name: Publish GUI
+        run: dotnet publish gui-winui -c Release -r win-arm64 -o gui-winui/publish
+      - name: Assemble portable zip
+        shell: pwsh
+        run: |
+          $out = "Conduit-arm64"
+          New-Item -ItemType Directory -Force "$out/gui" | Out-Null
+          Copy-Item "target/aarch64-pc-windows-msvc/release/conduit.exe" "$out/"
+          Copy-Item "gui-winui/publish/*" "$out/gui/" -Recurse
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "$out/*" -DestinationPath "dist/Conduit-arm64-portable.zip" -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64
           path: dist/*
 
   # ------------------------------------------------------------------ Linux
@@ -126,7 +169,7 @@ jobs:
 
   # ---------------------------------------------------------------- publish
   release:
-    needs: [windows, linux, macos]
+    needs: [windows-x64, windows-arm64, linux, macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -137,5 +180,6 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
-# A styled, modern Windows installer (Velopack is the leading option) plus
-# download-and-apply auto-update land here once that approach is settled.
+# Windows ships a Velopack Setup.exe + update feed (x64) and a portable zip
+# (arm64); Linux ships .deb + AppImage; macOS ships a .dmg. The app's built-in
+# updater reads the Velopack feed once the releases are publicly readable.
