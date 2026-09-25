@@ -56,6 +56,11 @@ pub fn import(zip_path: &Path, root: &Path, lim: ImportLimits) -> Result<usize, 
     let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("not a valid zip: {e}"))?;
 
+    // sandbox::resolve compares against a canonical root; canonicalize here so a
+    // symlinked prefix (e.g. macOS /var -> /private/var) doesn't look like an
+    // escape.
+    let root = &root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+
     let mut used = lim.used;
     let mut files = lim.files;
     let mut written = 0usize;

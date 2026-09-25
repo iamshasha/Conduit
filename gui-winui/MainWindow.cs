@@ -669,9 +669,9 @@ sealed class MainWindow : Window
             who.Children.Add(name);
             var permNames = granted.Count == 0 ? Loc.T("none")
                 : string.Join(", ", all.Where(granted.Contains).Select(p => Loc.T("perm_" + p)));
-            string? exp = g["session"]?.GetValue<bool>() == true ? Loc.T("session_only") : null;
-            if (exp is null && g["expires_in"] is JsonValue ev && ev.TryGetValue<long>(out var esecs)) exp = FmtDur(esecs);
-            var expLine = exp is null ? "" : $"\n{Loc.T("expires_label")} · {exp}";
+            string? expTxt = g["session"]?.GetValue<bool>() == true ? Loc.T("session_only") : null;
+            if (expTxt is null && g["expires_in"] is JsonValue ev && ev.TryGetValue<long>(out var esecs)) expTxt = FmtDur(esecs);
+            var expLine = expTxt is null ? "" : $"\n{Loc.T("expires_label")} · {expTxt}";
             who.Children.Add(Ui.Secondary($"{permNames}\n{Loc.T("storage_used", ("size", Ui.Bytes(used)), ("files", files))}{expLine}"));
 
             var quick = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
