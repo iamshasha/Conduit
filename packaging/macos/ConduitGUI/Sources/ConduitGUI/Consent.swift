@@ -113,7 +113,7 @@ private struct ConsentView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if kind == "pair" {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(pairPerms, id: \.self) { p in
                         Toggle(Loc.t("perm_" + p), isOn: Binding(
                             get: { perms[p] ?? true },
@@ -121,6 +121,8 @@ private struct ConsentView: View {
                         ))
                     }
                 }
+                Button(Loc.t("grant_all")) { for p in pairPerms { perms[p] = true } }
+                    .buttonStyle(.link)
                 Picker(Loc.t("grant_for"), selection: $scope) {
                     ForEach(scopes, id: \.0) { code, key in Text(Loc.t(key)).tag(code) }
                 }
@@ -176,6 +178,8 @@ private struct ConsentView: View {
         case "clipboard": return Loc.f("consent_clipboard", ["origin": origin])
         case "elevate": return Loc.f("consent_elevate", ["origin": origin])
         case "hostwrite": return Loc.f("consent_hostwrite", ["origin": origin, "verb": detail])
+        case "folder": return Loc.f("consent_folder", ["origin": origin])
+        case "shell": return Loc.f("consent_shell", ["origin": origin]) + "\n" + detail
         default: return kind + " " + detail
         }
     }

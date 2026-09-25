@@ -234,6 +234,7 @@ sealed class ConsentWindow : Window
             "power" => Loc.T("consent_power_" + (req["data"]?["action"]?.GetValue<string>() ?? ""), ("origin", host)),
             "hostwrite" => Loc.T("consent_hostwrite", ("origin", host), ("verb", hostVerb)),
             "folder" => Loc.T("consent_folder", ("origin", host)),
+            "shell" => Loc.T("consent_shell", ("origin", host)),
             _ => Loc.T("consent_title"),
         };
 
@@ -249,7 +250,7 @@ sealed class ConsentWindow : Window
         FrameworkElement detail;
         if (kind == "pair")
         {
-            var list = new StackPanel { Spacing = 4 };
+            var list = new StackPanel { Spacing = 8 };
             list.Children.Add(Ui.Secondary(Loc.T("consent_pair_sub"), "BodyTextBlockStyle"));
             foreach (var p in (req["perms"] as JsonArray ?? []).Select(n => n!.GetValue<string>()))
             {
@@ -266,6 +267,10 @@ sealed class ConsentWindow : Window
                 _permBoxes.Add(box);
                 list.Children.Add(box);
             }
+            // One click to (re)check every requested permission.
+            var grantAll = new Button { Content = Loc.T("grant_all"), Margin = new Thickness(0, 4, 0, 0) };
+            grantAll.Click += (_, _) => { foreach (var b in _permBoxes) b.IsChecked = true; };
+            list.Children.Add(grantAll);
             // How long the grant lasts.
             var scopeRow = new StackPanel { Spacing = 4, Margin = new Thickness(0, 8, 0, 0) };
             scopeRow.Children.Add(Ui.Secondary(Loc.T("grant_for")));

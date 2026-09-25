@@ -142,6 +142,7 @@ impl ConsentWindow {
             "elevate" => tf("consent_elevate", &o),
             "hostwrite" => tf("consent_hostwrite", &[("origin", origin.as_str()), ("verb", detail.as_str())]),
             "folder" => tf("consent_folder", &o),
+            "shell" => format!("{}\n{detail}", tf("consent_shell", &o)),
             _ => format!("{kind} {detail}"),
         };
         let msg = Label::new(Some(&ask));
@@ -153,16 +154,30 @@ impl ConsentWindow {
         let perm_checks: Rc<RefCell<Vec<(String, CheckButton)>>> = Rc::new(RefCell::new(Vec::new()));
         if kind == "pair" {
             if let Some(perms) = req["perms"].as_array() {
-                let list = GBox::new(Orientation::Vertical, 4);
-                list.set_margin_top(6);
+                let list = GBox::new(Orientation::Vertical, 8);
+                list.set_margin_top(10);
+                list.set_margin_bottom(6);
                 for p in perms {
                     let name = p.as_str().unwrap_or("").to_string();
                     let cb = CheckButton::with_label(&t(&format!("perm_{name}")));
                     cb.set_active(true);
+                    cb.set_margin_top(2);
+                    cb.set_margin_bottom(2);
                     list.append(&cb);
                     perm_checks.borrow_mut().push((name, cb));
                 }
                 body.append(&list);
+                // One click to (re)check every requested permission.
+                let grant_all = Button::with_label(&t("grant_all"));
+                grant_all.add_css_class("flat");
+                grant_all.set_halign(Align::Start);
+                let pc = perm_checks.clone();
+                grant_all.connect_clicked(move |_| {
+                    for (_, cb) in pc.borrow().iter() {
+                        cb.set_active(true);
+                    }
+                });
+                body.append(&grant_all);
             }
         }
 

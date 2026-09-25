@@ -852,10 +852,17 @@ sealed class MainWindow : Window
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        var top = new Grid();
-        top.Children.Add(Ui.Text(Loc.T("nav_activity"), "TitleTextBlockStyle"));
+        // Two columns so the Clear button sits beside the title, never over it.
+        var top = new Grid { ColumnSpacing = 12 };
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var actTitle = Ui.Text(Loc.T("nav_activity"), "TitleTextBlockStyle");
+        actTitle.VerticalAlignment = VerticalAlignment.Center;
+        top.Children.Add(actTitle);
         var clear = Ui.IconButton("", Loc.T("clear"), (_, _) => Core.Cmd("clear_activity"));
         clear.HorizontalAlignment = HorizontalAlignment.Right;
+        clear.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(clear, 1);
         top.Children.Add(clear);
         grid.Children.Add(top);
 
