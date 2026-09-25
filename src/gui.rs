@@ -496,6 +496,55 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                 }
             });
         }
+        "export_site" => {
+            let dir = state.sites_root().join(crate::sandbox::origin_key(origin));
+            let downloads = dirs::download_dir().unwrap_or_else(|| state.cfg.data_dir.clone());
+            let stamp = crate::state::now_secs();
+            let name = format!("conduit-{}-{}.zip", crate::sandbox::origin_key(origin), stamp);
+            let out = downloads.join(name);
+            let (st, tx, origin_s) = (state.clone(), link.sender(), origin.to_string());
+            link.rt.spawn_blocking(move || {
+                let _ = &st;
+                let reply = match crate::archive::export(&dir, &out) {
+                    Ok(_) => {
+                        let _ = system::reveal(&out, true);
+                        json!({"type": "toast", "data": "toast_exported"})
+                    }
+                    Err(e) => json!({"type": "toast", "data": e}),
+                };
+                let _ = origin_s;
+                if let Some(tx) = tx {
+                    let _ = tx.send(reply.to_string());
+                }
+            });
+        }
+        "import_site" => {
+            let zip = PathBuf::from(msg["path"].as_str().unwrap_or(""));
+            if !zip.is_file() {
+                return toast(Err("pick a .zip file".into()));
+            }
+            let dir = state.sites_root().join(crate::sandbox::origin_key(origin));
+            let _ = std::fs::create_dir_all(&dir);
+            let (used, files) = crate::sandbox::usage(&dir);
+            let lim = crate::archive::ImportLimits {
+                max_file: state.cfg.max_file,
+                quota: state.quota_for(origin),
+                max_files: state.cfg.max_files,
+                used,
+                files,
+            };
+            let (st, tx) = (state.clone(), link.sender());
+            link.rt.spawn_blocking(move || {
+                let reply = match crate::archive::import(&zip, &dir, lim) {
+                    Ok(_) => json!({"type": "toast", "data": "toast_imported"}),
+                    Err(e) => json!({"type": "toast", "data": e}),
+                };
+                if let Some(tx) = tx {
+                    let _ = tx.send(reply.to_string());
+                    let _ = tx.send(json!({"type": "snapshot", "data": snapshot(&st)}).to_string());
+                }
+            });
+        }
         "revoke" => state.revoke(origin),
         "set_perms" => {
             state.set_perms(origin, strings(&msg["perms"]));
