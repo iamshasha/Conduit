@@ -58,16 +58,23 @@ static class Core
 
     static async Task ReadLoopAsync()
     {
-        using var reader = new StreamReader(_pipe!, new UTF8Encoding(false));
-        string? line;
-        while ((line = await reader.ReadLineAsync()) is not null)
+        // This runs on a detached task; an exception escaping here (e.g. the
+        // pipe breaking mid-read) would be an unobserved crash, so swallow it
+        // and treat any end/failure as the core going away.
+        try
         {
-            JsonNode? node;
-            try { node = JsonNode.Parse(line); } catch { continue; }
-            var type = node?["type"]?.GetValue<string>() ?? "";
-            var data = node?["data"]?.DeepClone();
-            App.UI.TryEnqueue(() => Message?.Invoke(type, data));
+            using var reader = new StreamReader(_pipe!, new UTF8Encoding(false));
+            string? line;
+            while ((line = await reader.ReadLineAsync()) is not null)
+            {
+                JsonNode? node;
+                try { node = JsonNode.Parse(line); } catch { continue; }
+                var type = node?["type"]?.GetValue<string>() ?? "";
+                var data = node?["data"]?.DeepClone();
+                App.UI.TryEnqueue(() => Message?.Invoke(type, data));
+            }
         }
+        catch (Exception e) { App.Log($"read loop: {e}"); }
         App.UI.TryEnqueue(() => Closed?.Invoke());
     }
 }

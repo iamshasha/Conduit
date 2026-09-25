@@ -667,18 +667,33 @@ sealed class MainWindow : Window
             };
             ToolTipService.SetToolTip(name, origin);
             who.Children.Add(name);
-            var permNames = granted.Count == 0 ? Loc.T("none")
-                : string.Join(", ", all.Where(granted.Contains).Select(p => Loc.T("perm_" + p)));
+            // A compact glyph row (not the joined names) so a site with many
+            // permissions keeps the collapsed card a fixed, small height. Full
+            // names live in the tooltip; the checkboxes below do the editing.
+            var grantedPerms = all.Where(granted.Contains).ToList();
+            var permRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
+            if (grantedPerms.Count == 0)
+            {
+                permRow.Children.Add(Ui.Secondary(Loc.T("none")));
+            }
+            else
+            {
+                foreach (var p in grantedPerms)
+                {
+                    var ic = Ui.Icon(Ui.PermGlyph.GetValueOrDefault(p, ""), 14);
+                    ic.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+                    permRow.Children.Add(ic);
+                }
+                ToolTipService.SetToolTip(permRow, string.Join(", ", grantedPerms.Select(p => Loc.T("perm_" + p))));
+            }
+            who.Children.Add(permRow);
             string? expTxt = g["session"]?.GetValue<bool>() == true ? Loc.T("session_only") : null;
             if (expTxt is null && g["expires_in"] is JsonValue ev && ev.TryGetValue<long>(out var esecs)) expTxt = FmtDur(esecs);
             var expLine = expTxt is null ? "" : $"\n{Loc.T("expires_label")} · {expTxt}";
-            who.Children.Add(Ui.Secondary($"{permNames}\n{Loc.T("storage_used", ("size", Ui.Bytes(used)), ("files", files))}{expLine}"));
+            who.Children.Add(Ui.Secondary($"{Loc.T("storage_used", ("size", Ui.Bytes(used)), ("files", files))}{expLine}"));
 
             var quick = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
-            var filesBtn = Ui.IconButton("", Loc.T("files"),
-                (_, _) => Core.Cmd("browse", new JsonObject { ["origin"] = origin, ["path"] = "" }));
-            filesBtn.IsEnabled = files > 0;
-            quick.Children.Add(filesBtn);
+            // In-app file browser removed (crash-prone); use "open sandbox" instead.
             quick.Children.Add(Ui.IconButton("", Loc.T("open_sandbox"),
                 (_, _) => Core.Cmd("open_sandbox", new JsonObject { ["origin"] = origin })));
             quick.Children.Add(Ui.IconButton("", Loc.T("export_files"),
@@ -741,8 +756,33 @@ sealed class MainWindow : Window
             }
             repeater.ItemsSource = items;
 
+            // Set every box and push the result in one go, so granting or
+            // clearing all permissions is a single click, not thirteen.
+            void SetAll(bool on)
+            {
+                foreach (var b in boxes) b.IsChecked = on;
+                var picked = on ? all.ToList() : new List<string>();
+                var arr = new JsonArray(picked.Select(x => (JsonNode?)x).ToArray());
+                Patch(s =>
+                {
+                    var mine = (s["grants"] as JsonArray)?.FirstOrDefault(x => x?["origin"]?.GetValue<string>() == origin);
+                    if (mine is not null) mine["perms"] = arr.DeepClone();
+                });
+                Core.Cmd("set_perms", new JsonObject { ["origin"] = origin, ["perms"] = arr });
+            }
+
+            var permHead = new Grid();
+            permHead.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            permHead.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            permHead.Children.Add(Ui.Text(Loc.T("permissions"), "BodyStrongTextBlockStyle"));
+            var permBtns = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+            permBtns.Children.Add(Ui.With(new Button { Content = Loc.T("grant_all") }, b => b.Click += (_, _) => SetAll(true)));
+            permBtns.Children.Add(Ui.With(new Button { Content = Loc.T("clear") }, b => b.Click += (_, _) => SetAll(false)));
+            Grid.SetColumn(permBtns, 1);
+            permHead.Children.Add(permBtns);
+
             var body = new StackPanel { Spacing = 10 };
-            body.Children.Add(Ui.Text(Loc.T("permissions"), "BodyStrongTextBlockStyle"));
+            body.Children.Add(permHead);
             body.Children.Add(repeater);
 
             var apps = g["launch_allow"] as JsonArray ?? [];

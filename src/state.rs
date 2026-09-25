@@ -209,7 +209,7 @@ pub enum UiEvent {
     Quit,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Activity {
     pub ts: u64,
     pub origin: String,
@@ -244,6 +244,7 @@ pub struct AppState {
     pending: Mutex<HashMap<u64, (ConsentReq, oneshot::Sender<ConsentAnswer>)>>,
     next_id: AtomicU64,
     activity: Mutex<VecDeque<Activity>>,
+    activity_path: PathBuf,
     /// Kept between calls so CPU usage is a delta, not a spike.
     pub sys: Mutex<sysinfo::System>,
     pub nets: Mutex<(sysinfo::Networks, Instant)>,
@@ -272,9 +273,12 @@ impl AppState {
         std::fs::create_dir_all(&cfg.data_dir)?;
         let grants_path = cfg.data_dir.join("grants.json");
         let settings_path = cfg.data_dir.join("settings.json");
+        let activity_path = cfg.data_dir.join("activity.json");
         let read = |p: &PathBuf| std::fs::read(p).ok();
         let grants: Grants = read(&grants_path).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         let settings: Settings = read(&settings_path).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let activity: VecDeque<Activity> =
+            read(&activity_path).and_then(|b| serde_json::from_slice::<Vec<Activity>>(&b).ok()).map(VecDeque::from).unwrap_or_default();
         let sites = settings.sites_dir.as_ref().map(PathBuf::from).unwrap_or_else(|| cfg.data_dir.join("sites"));
         std::fs::create_dir_all(sites)?;
         let instance_key = random_token();
@@ -292,7 +296,8 @@ impl AppState {
             ui: OnceLock::new(),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
-            activity: Mutex::new(VecDeque::new()),
+            activity: Mutex::new(activity),
+            activity_path,
             // The first CPU sample is meaningless (no previous tick to diff
             // against); take it now so the first real reading is a delta.
             sys: Mutex::new({
@@ -615,6 +620,7 @@ impl AppState {
             ok,
             code: code.into(),
         });
+        self.save_activity(&a);
     }
 
     pub fn activity_json(&self) -> Value {
@@ -622,7 +628,18 @@ impl AppState {
     }
 
     pub fn clear_activity(&self) {
-        self.activity.lock().unwrap().clear();
+        let mut a = self.activity.lock().unwrap();
+        a.clear();
+        self.save_activity(&a);
+    }
+
+    /// Persist the activity log so it survives a restart.
+    // ponytail: write-through on every event; fine at ACTIVITY_CAP=200 on a
+    // localhost tool. Batch/debounce only if a busy site makes the I/O show up.
+    fn save_activity(&self, a: &VecDeque<Activity>) {
+        if let Ok(bytes) = serde_json::to_vec(&a.iter().collect::<Vec<_>>()) {
+            let _ = std::fs::write(&self.activity_path, bytes);
+        }
     }
 
     // ---------------------------------------------------------- rate limit
