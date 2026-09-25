@@ -14,12 +14,21 @@ pub fn endpoint(cfg_endpoint: &str) -> String {
     e.trim_end_matches('/').to_string()
 }
 
+// native-tls (Schannel): lets an https endpoint work and keeps the arm64 build
+// free of bundled crypto (ring/aws-lc need clang). PlatformVerifier is required:
+// ureq defaults root_certs to a bundled WebPki set that fails to chain-validate
+// some CDN certs (e.g. GitHub release assets); the OS store has the full roots.
+fn tls() -> ureq::tls::TlsConfig {
+    ureq::tls::TlsConfig::builder()
+        .provider(ureq::tls::TlsProvider::NativeTls)
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .build()
+}
+
 fn agent(secs: u64) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(secs)))
-        // native-tls (Schannel): lets an https AI endpoint work and keeps the
-        // arm64 build free of bundled crypto (ring/aws-lc need clang).
-        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build())
+        .tls_config(tls())
         .build()
         .into()
 }
@@ -31,7 +40,7 @@ fn long_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_recv_response(Some(Duration::from_secs(60)))
-        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build())
+        .tls_config(tls())
         .build()
         .into()
 }

@@ -59,6 +59,29 @@ pub struct Opts {
     pub url: Option<String>,
 }
 
+/// Append every panic (message + location) to data_dir/crash.log, then run the
+/// default hook. Without this a release-build panic is invisible.
+fn install_panic_hook(dir: &std::path::Path) {
+    let dir = dir.to_path_buf();
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let loc = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".into());
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+            use std::io::Write;
+            let _ = writeln!(f, "[{ts}] panic at {loc}: {msg}");
+        }
+        default(info);
+    }));
+}
+
 fn main() {
     // Velopack's lifecycle hook must run before anything else: on Windows it
     // handles the installer's post-install / update / uninstall callbacks and may
@@ -77,6 +100,9 @@ fn main() {
     if opts.headless {
         system::attach_parent_console();
     }
+    // Release builds run with windows_subsystem=windows (no console), so a panic
+    // otherwise vanishes with no trace. Record it to data_dir/crash.log.
+    install_panic_hook(&opts.cfg.data_dir);
 
     let listener = match bind(opts.cfg.port, opts.wait_port) {
         Ok(l) => l,

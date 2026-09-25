@@ -32,7 +32,9 @@ pub fn check() -> Value {
         .config()
         .timeout_global(Some(Duration::from_secs(10)))
         // native-tls (Schannel) so the arm64 build needs no bundled crypto.
-        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build())
+        // PlatformVerifier uses the OS trust store; the default WebPki root set
+        // fails to chain-validate some GitHub CDN certs.
+        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
         .build()
         .call();
 
