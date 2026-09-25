@@ -13,7 +13,7 @@ live file-change events over the WebSocket, and a site's sandbox can be exported
 to and restored from a `.zip`.
 
 Native GUIs on every OS (WinUI 3 on Windows, GTK 4 on Linux, SwiftUI on macOS),
-each with 21-language i18n and an animated, Deny-by-default consent prompt, plus
+each with 20-language i18n and an animated, Deny-by-default consent prompt, plus
 a TurboWarp extension. Speaks WebSocket **and** plain HTTP JSON.
 
 ```bash
