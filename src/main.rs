@@ -370,6 +370,8 @@ async fn health() -> impl IntoResponse {
                         "sys.media","sys.volume","sys.volume.set","sys.media.info","sys.media.control","sys.open_url","sys.processes","sys.kill","sys.power",
                         "sys.elevation","sys.elevate","sys.gpu","clipboard.write","clipboard.read","notify",
                         "host.roots","host.list","host.stat","host.read","host.write","host.delete","host.mkdir","host.move",
+                        "folder.pick","folder.granted","folder.list","folder.read","folder.write","folder.stat","folder.mkdir","folder.delete","folder.move","folder.forget",
+                        "watch","unwatch",
                         "crypto.encrypt","crypto.decrypt","ai.status","ai.generate"],
         })),
     )

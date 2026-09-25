@@ -56,11 +56,15 @@ struct Client {
 }
 
 fn pair(s: &Server, origin: &str) -> Client {
+    pair_perms(s, origin, &["fs", "hw", "launch"])
+}
+
+fn pair_perms(s: &Server, origin: &str, perms: &[&str]) -> Client {
     let http = reqwest::blocking::Client::new();
     let r: Value = http
         .post(format!("http://{}/pair", s.addr))
         .header("Origin", origin)
-        .json(&json!({"perms": ["fs", "hw", "launch"]}))
+        .json(&json!({"perms": perms}))
         .send()
         .unwrap()
         .json()
@@ -445,4 +449,87 @@ fn revoke_invalidates_the_token() {
         .send()
         .unwrap();
     assert_eq!(r.status(), 401);
+}
+
+// ------------------------------------------------------------------ folders
+
+#[test]
+fn folder_grant_is_scoped_and_forgettable() {
+    let fdir = std::env::temp_dir().join(format!("conduit_fld_{}_{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(&fdir).unwrap();
+    std::fs::write(fdir.join("existing.txt"), b"host file").unwrap();
+
+    let s = start(&["--pick-folder", fdir.to_str().unwrap()]);
+    let c = pair_perms(&s, "https://f.example", &["folder"]);
+
+    let pick = c.ok("folder.pick", json!({"name": "test"}));
+    let id = pick["id"].as_str().unwrap().to_string();
+
+    // The granted folder sees its own contents.
+    let l = c.ok("folder.list", json!({"id": id}));
+    assert!(l["entries"].as_array().unwrap().iter().any(|e| e["name"] == "existing.txt"));
+
+    // Write and read back inside the folder.
+    c.ok("folder.write", json!({"id": id, "path": "sub/new.txt", "data": "from site"}));
+    assert_eq!(c.ok("folder.read", json!({"id": id, "path": "sub/new.txt"}))["data"], json!("from site"));
+    assert_eq!(std::fs::read_to_string(fdir.join("sub/new.txt")).unwrap(), "from site");
+
+    // No escaping the folder.
+    assert_eq!(c.err("folder.read", json!({"id": id, "path": "../../etc/hosts"})), "bad_path");
+
+    // Forget removes access.
+    c.ok("folder.forget", json!({"id": id}));
+    assert_eq!(c.err("folder.list", json!({"id": id})), "not_found");
+
+    let _ = std::fs::remove_dir_all(&fdir);
+}
+
+#[test]
+fn folder_needs_permission() {
+    let s = start(&[]);
+    let c = pair_perms(&s, "https://g.example", &["fs"]);
+    assert_eq!(c.err("folder.pick", json!({})), "denied");
+}
+
+// -------------------------------------------------------------- ws watching
+
+fn ws_wait_event(
+    ws: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+    event: &str,
+) -> Value {
+    use tungstenite::Message;
+    if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_ref() {
+        s.set_read_timeout(Some(std::time::Duration::from_secs(6))).unwrap();
+    }
+    loop {
+        match ws.read().expect("ws read") {
+            Message::Text(t) => {
+                let v: Value = serde_json::from_str(&t).unwrap();
+                if v["event"] == json!(event) {
+                    return v;
+                }
+            }
+            _ => continue,
+        }
+    }
+}
+
+#[test]
+fn websocket_pushes_file_change_events() {
+    let s = start(&[]);
+    let c = pair(&s, "https://w.example");
+    let mut ws = ws_connect(&s.addr, "https://w.example");
+
+    assert_eq!(ws_call(&mut ws, "auth", json!({"token": c.token}))["ok"], json!(true));
+    let r = ws_call(&mut ws, "watch", json!({"scope": "sandbox"}));
+    assert_eq!(r["ok"], json!(true), "watch failed: {r}");
+
+    // A separate HTTP write into the sandbox should surface as an event.
+    c.ok("fs.write", json!({"path": "evt.txt", "data": "hi"}));
+    let ev = ws_wait_event(&mut ws, "fs.change");
+    assert!(
+        ev["changes"].as_array().unwrap().iter().any(|c| c["path"] == "evt.txt" && c["kind"] == "added"),
+        "expected an added event for evt.txt, got {ev}"
+    );
 }

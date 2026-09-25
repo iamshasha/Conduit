@@ -2,13 +2,19 @@
 
 A small Rust host app that lets an **approved** website do things the browser
 sandbox forbids: keep real files in a per-site sandbox (far bigger than cookies
-or localStorage), launch applications, read hardware info and live stats,
-control media/power/clipboard, list and end processes, and request elevation —
-each ability gated by a permission the user grants with a click.
+or localStorage), read and write a specific host folder the user picks, launch
+applications, read hardware info and live stats, control media/power/clipboard,
+list and end processes, and request elevation — each ability gated by a
+permission the user grants with a click.
 
-Ships a fluent Windows GUI (Mica, tray, on-demand WebView windows, 21-language
-i18n, animated consent pop-ups) and a TurboWarp extension. Speaks WebSocket
-**and** plain HTTP JSON.
+Grants can be scoped in time (this session, an hour, a day, or always) and are
+revocable at any moment, even on an open connection. A page can subscribe to
+live file-change events over the WebSocket, and a site's sandbox can be exported
+to and restored from a `.zip`.
+
+Native GUIs on every OS (WinUI 3 on Windows, GTK 4 on Linux, SwiftUI on macOS),
+each with 21-language i18n and an animated, Deny-by-default consent prompt, plus
+a TurboWarp extension. Speaks WebSocket **and** plain HTTP JSON.
 
 ```bash
 cargo build --release

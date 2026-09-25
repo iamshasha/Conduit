@@ -14,7 +14,7 @@
   }
 
   const DEFAULT_PORT = 8765;
-  const PERMS = ['fs', 'hw', 'launch', 'system', 'process', 'power', 'clipboard', 'notify'];
+  const PERMS = ['fs', 'hw', 'launch', 'system', 'process', 'power', 'clipboard', 'notify', 'folder'];
 
   class Conduit {
     constructor() {
@@ -25,6 +25,10 @@
       this.lastError = '';
       this.grantedPerms = [];
       this.connecting = null;
+      // File-change watching: the host pushes fs.change events with no id.
+      this.watchId = null;
+      this._pendingChange = false;
+      this._lastChanges = [];
     }
 
     base() {
@@ -136,6 +140,16 @@
       try {
         msg = JSON.parse(ev.data);
       } catch (e) {
+        return;
+      }
+      // Pushed events carry `event` and no id.
+      if (msg.event) {
+        if (msg.event === 'fs.change') {
+          this._pendingChange = true;
+          this._lastChanges = msg.changes || [];
+        } else if (msg.event === 'watch.stopped') {
+          this.watchId = null;
+        }
         return;
       }
       const p = this.pending.get(msg.id);
@@ -330,6 +344,43 @@
           { opcode: 'isAdmin', blockType: Scratch.BlockType.BOOLEAN, text: 'running as administrator?' },
           { opcode: 'requestAdmin', blockType: Scratch.BlockType.COMMAND, text: 'request administrator rights' },
           '---',
+          // Host folders the user picks once, then the project reads/writes inside.
+          { opcode: 'pickFolder', blockType: Scratch.BlockType.REPORTER,
+            text: 'ask for a folder named [NAME] (returns its id)',
+            arguments: { NAME: { type: Scratch.ArgumentType.STRING, defaultValue: 'my project' } } },
+          { opcode: 'grantedFolders', blockType: Scratch.BlockType.REPORTER, text: 'granted folders as JSON' },
+          { opcode: 'folderWrite', blockType: Scratch.BlockType.COMMAND,
+            text: 'write [DATA] to [PATH] in folder [ID]',
+            arguments: {
+              DATA: { type: Scratch.ArgumentType.STRING, defaultValue: 'hello' },
+              PATH: { type: Scratch.ArgumentType.STRING, defaultValue: 'notes.txt' },
+              ID: { type: Scratch.ArgumentType.STRING, defaultValue: '' },
+            } },
+          { opcode: 'folderRead', blockType: Scratch.BlockType.REPORTER,
+            text: 'read [PATH] in folder [ID]',
+            arguments: {
+              PATH: { type: Scratch.ArgumentType.STRING, defaultValue: 'notes.txt' },
+              ID: { type: Scratch.ArgumentType.STRING, defaultValue: '' },
+            } },
+          { opcode: 'folderList', blockType: Scratch.BlockType.REPORTER,
+            text: 'list [PATH] in folder [ID]',
+            arguments: {
+              PATH: { type: Scratch.ArgumentType.STRING, defaultValue: '' },
+              ID: { type: Scratch.ArgumentType.STRING, defaultValue: '' },
+            } },
+          { opcode: 'forgetFolder', blockType: Scratch.BlockType.COMMAND,
+            text: 'forget folder [ID]',
+            arguments: { ID: { type: Scratch.ArgumentType.STRING, defaultValue: '' } } },
+          '---',
+          // Live file-change watching.
+          { opcode: 'watchSandbox', blockType: Scratch.BlockType.COMMAND, text: 'watch my files for changes' },
+          { opcode: 'watchFolder', blockType: Scratch.BlockType.COMMAND,
+            text: 'watch folder [ID] for changes',
+            arguments: { ID: { type: Scratch.ArgumentType.STRING, defaultValue: '' } } },
+          { opcode: 'stopWatching', blockType: Scratch.BlockType.COMMAND, text: 'stop watching for changes' },
+          { opcode: 'whenFilesChange', blockType: Scratch.BlockType.HAT, text: 'when files change' },
+          { opcode: 'changedFiles', blockType: Scratch.BlockType.REPORTER, text: 'changed files as JSON' },
+          '---',
           { opcode: 'raw', blockType: Scratch.BlockType.REPORTER,
             text: 'call [METHOD] with params [PARAMS]',
             arguments: {
@@ -445,6 +496,62 @@
       return this.call('fs.move', { from: Scratch.Cast.toString(args.FROM), to: Scratch.Cast.toString(args.TO), overwrite: true })
         .then(() => undefined, () => undefined);
     }
+    // --- granted host folders ---
+    async pickFolder(args) {
+      const r = await this.soft('folder.pick', { name: Scratch.Cast.toString(args.NAME) }, null);
+      return r ? r.id : '';
+    }
+    async grantedFolders() {
+      const r = await this.soft('folder.granted', {}, { folders: [] });
+      return JSON.stringify(r.folders || []);
+    }
+    folderWrite(args) {
+      return this.call('folder.write', {
+        id: Scratch.Cast.toString(args.ID),
+        path: Scratch.Cast.toString(args.PATH),
+        data: Scratch.Cast.toString(args.DATA),
+      }).then(() => undefined, () => undefined);
+    }
+    async folderRead(args) {
+      const r = await this.soft('folder.read', { id: Scratch.Cast.toString(args.ID), path: Scratch.Cast.toString(args.PATH) }, null);
+      return r ? r.data : '';
+    }
+    async folderList(args) {
+      const r = await this.soft('folder.list', { id: Scratch.Cast.toString(args.ID), path: Scratch.Cast.toString(args.PATH) }, { entries: [] });
+      return JSON.stringify((r.entries || []).map((e) => (e.dir ? `${e.name}/` : e.name)));
+    }
+    forgetFolder(args) {
+      return this.call('folder.forget', { id: Scratch.Cast.toString(args.ID) }).then(() => undefined, () => undefined);
+    }
+
+    // --- live file-change watching ---
+    async watchSandbox() {
+      const r = await this.soft('watch', { scope: 'sandbox' }, null);
+      if (r) this.watchId = r.watch;
+    }
+    async watchFolder(args) {
+      const r = await this.soft('watch', { scope: 'folder', id: Scratch.Cast.toString(args.ID) }, null);
+      if (r) this.watchId = r.watch;
+    }
+    stopWatching() {
+      if (this.watchId == null) return;
+      const id = this.watchId;
+      this.watchId = null;
+      return this.call('unwatch', { watch: id }).then(() => undefined, () => undefined);
+    }
+    whenFilesChange() {
+      // Edge-triggered: report the pending change once, then clear it so the
+      // next event fires the hat again.
+      if (this._pendingChange) {
+        this._pendingChange = false;
+        return true;
+      }
+      return false;
+    }
+    changedFiles() {
+      return JSON.stringify(this._lastChanges || []);
+    }
+
     revealFile(args) {
       return this.call('fs.reveal', { path: Scratch.Cast.toString(args.PATH) }).then(() => undefined, () => undefined);
     }
