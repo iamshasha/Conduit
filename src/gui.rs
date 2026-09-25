@@ -321,14 +321,20 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                 });
             }
         }
-        "consent" => state.answer(
-            msg["id"].as_u64().unwrap_or(0),
-            ConsentAnswer {
-                allow: msg["allow"].as_bool().unwrap_or(false),
-                perms: strings(&msg["perms"]),
-                remember: msg["remember"].as_bool().unwrap_or(false),
-            },
-        ),
+        "consent" => {
+            let (expires, session) = crate::state::scope_to_expiry(msg["scope"].as_str().unwrap_or(""));
+            state.answer(
+                msg["id"].as_u64().unwrap_or(0),
+                ConsentAnswer {
+                    allow: msg["allow"].as_bool().unwrap_or(false),
+                    perms: strings(&msg["perms"]),
+                    remember: msg["remember"].as_bool().unwrap_or(false),
+                    expires,
+                    session,
+                    path: msg["path"].as_str().unwrap_or("").to_string(),
+                },
+            )
+        }
         "settings" => {
             if let Ok(mut s) = serde_json::from_value::<Settings>(msg["settings"].clone()) {
                 // These change only through their own commands, never the form.
@@ -831,7 +837,7 @@ fn fallback_consent(state: Arc<AppState>, req: ConsentReq) {
             k => format!("requests: {k} {}", req.detail),
         };
         let yes = message_box(&format!("{}\n{what}\n\nAllow?", req.origin), true);
-        state.answer(req.id, ConsentAnswer { allow: yes, perms: if yes { req.perms } else { vec![] }, remember: false });
+        state.answer(req.id, ConsentAnswer { allow: yes, perms: if yes { req.perms } else { vec![] }, ..Default::default() });
     });
 }
 

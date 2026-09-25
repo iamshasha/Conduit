@@ -10,8 +10,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
-pub const PERMS: [&str; 11] =
-    ["fs", "hw", "launch", "system", "process", "power", "clipboard", "notify", "hostfs", "crypto", "ai"];
+pub const PERMS: [&str; 12] =
+    ["fs", "hw", "launch", "system", "process", "power", "clipboard", "notify", "hostfs", "crypto", "ai", "folder"];
 
 /// Consent kinds that `--yes` refuses to auto-approve: too destructive to
 /// click through by accident, even in a test rig.
@@ -30,6 +30,9 @@ pub struct Config {
     pub allow_origins: Vec<String>,
     pub auto_yes: bool,
     pub deny_all: bool,
+    /// Auto-answer folder picks with this path (kiosk / tests); None = the GUI
+    /// picker chooses. Only consulted under --yes.
+    pub pick_folder: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -44,6 +47,7 @@ impl Default for Config {
             allow_origins: Vec::new(),
             auto_yes: false,
             deny_all: false,
+            pick_folder: None,
         }
     }
 }
@@ -66,11 +70,48 @@ pub struct Grant {
     /// Per-site sandbox byte quota override; None = use the global default.
     #[serde(default)]
     pub quota: Option<u64>,
+    /// Unix seconds when this grant expires; None = never.
+    #[serde(default)]
+    pub expires: Option<u64>,
+    /// Session grant: kept only in memory, never written to disk, so it is gone
+    /// on the next launch. Not serialized (a loaded grant is never a session).
+    #[serde(default, skip)]
+    pub session: bool,
+    /// Host folders this origin may reach outside its sandbox, each picked by
+    /// the user. Session-scoped folders live only in memory.
+    #[serde(default)]
+    pub folders: Vec<FolderGrant>,
+}
+
+/// One user-picked host folder an origin may read and write.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FolderGrant {
+    /// Short stable id the page uses to address the folder.
+    pub id: String,
+    /// Display name (the folder's own name).
+    pub name: String,
+    /// Absolute host path, already canonicalized when granted.
+    pub path: String,
+    #[serde(default)]
+    pub granted: u64,
+    /// Read-only: the site may list and read but not modify.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 impl Grant {
     pub fn has(&self, perm: &str) -> bool {
         self.perms.iter().any(|p| p == perm)
+    }
+
+    /// False once the grant's expiry has passed.
+    pub fn valid(&self) -> bool {
+        self.expires.map_or(true, |e| e > now_secs())
+    }
+
+    /// Seconds until expiry, or None for a grant that never expires.
+    pub fn expires_in(&self) -> Option<u64> {
+        self.expires.map(|e| e.saturating_sub(now_secs()))
     }
 }
 
@@ -132,6 +173,23 @@ pub struct ConsentAnswer {
     pub allow: bool,
     pub perms: Vec<String>,
     pub remember: bool,
+    /// How long a pairing grant should last. None = the caller's default
+    /// (forever). Set by the GUI's duration chooser.
+    pub expires: Option<u64>,
+    /// Pairing grant that should live only until the app restarts.
+    pub session: bool,
+    /// For a folder pick: the absolute path the user chose (empty = none).
+    pub path: String,
+}
+
+/// Turn a GUI scope string into (expires, session). "always"/"" = forever.
+pub fn scope_to_expiry(scope: &str) -> (Option<u64>, bool) {
+    match scope {
+        "session" => (None, true),
+        "1h" => (Some(now_secs() + 3600), false),
+        "1d" => (Some(now_secs() + 86_400), false),
+        _ => (None, false),
+    }
 }
 
 impl ConsentAnswer {
@@ -307,8 +365,18 @@ impl AppState {
 
     // -------------------------------------------------------------- grants
 
+    /// Persist only durable grants: session grants and already-expired ones are
+    /// never written to disk.
     fn save_grants(&self, g: &Grants) {
-        if let Ok(json) = serde_json::to_vec_pretty(g) {
+        let durable = Grants {
+            origins: g
+                .origins
+                .iter()
+                .filter(|(_, x)| !x.session && x.valid())
+                .map(|(o, x)| (o.clone(), x.clone()))
+                .collect(),
+        };
+        if let Ok(json) = serde_json::to_vec_pretty(&durable) {
             let _ = std::fs::write(&self.grants_path, json);
         }
     }
@@ -319,18 +387,28 @@ impl AppState {
         if !Self::eq_ct(&grant.token_sha256, &Self::sha256_hex(token)) {
             return None;
         }
+        // A grant past its expiry is gone: drop it so an open socket loses access
+        // too, and the dashboard stops listing it.
+        if !grant.valid() {
+            g.origins.remove(origin);
+            self.save_grants(&g);
+            drop(g);
+            self.emit(UiEvent::Changed);
+            return None;
+        }
         // ponytail: last_used lives in memory until the next grant write;
         // good enough for a "last used" label.
         grant.last_used = now_secs();
         Some(grant.clone())
     }
 
-    pub fn store_grant(&self, origin: &str, token: &str, perms: Vec<String>) {
+    pub fn store_grant(&self, origin: &str, token: &str, perms: Vec<String>, expires: Option<u64>, session: bool) {
         let mut g = self.grants.lock().unwrap();
-        let (keep, quota) = g
+        // Keep the site's remembered apps, quota and folders across a re-pair.
+        let (keep, quota, folders) = g
             .origins
             .get(origin)
-            .map(|x| (x.launch_allow.clone(), x.quota))
+            .map(|x| (x.launch_allow.clone(), x.quota, x.folders.clone()))
             .unwrap_or_default();
         g.origins.insert(
             origin.to_string(),
@@ -341,11 +419,28 @@ impl AppState {
                 last_used: now_secs(),
                 launch_allow: keep,
                 quota,
+                expires,
+                session,
+                folders,
             },
         );
         self.save_grants(&g);
         drop(g);
         self.emit(UiEvent::Changed);
+    }
+
+    /// Drop every grant whose expiry has passed. Returns how many went.
+    pub fn purge_expired(&self) -> usize {
+        let mut g = self.grants.lock().unwrap();
+        let before = g.origins.len();
+        g.origins.retain(|_, x| x.valid());
+        let removed = before - g.origins.len();
+        if removed > 0 {
+            self.save_grants(&g);
+            drop(g);
+            self.emit(UiEvent::Changed);
+        }
+        removed
     }
 
     pub fn revoke(&self, origin: &str) {
@@ -399,6 +494,52 @@ impl AppState {
         }
     }
 
+    /// Record a user-picked host folder for an origin. Returns the folder's id.
+    /// A `session` grant lives only in memory. Replaces any folder with the same
+    /// path so re-picking doesn't duplicate.
+    pub fn add_folder(&self, origin: &str, name: &str, path: &str, read_only: bool, session: bool) -> Option<String> {
+        let mut g = self.grants.lock().unwrap();
+        let x = g.origins.get_mut(origin)?;
+        x.folders.retain(|f| !Self::eq_ct(&f.path, path));
+        let id = random_token()[..12].to_string();
+        x.folders.push(FolderGrant {
+            id: id.clone(),
+            name: name.to_string(),
+            path: path.to_string(),
+            granted: now_secs(),
+            read_only,
+        });
+        // A session folder must not be written; a durable one is fine to persist,
+        // but only if the whole grant is durable.
+        if !session && !x.session {
+            self.save_grants(&g);
+        }
+        drop(g);
+        self.emit(UiEvent::Changed);
+        Some(id)
+    }
+
+    /// Remove one granted folder by id. Returns true if it existed.
+    pub fn forget_folder(&self, origin: &str, id: &str) -> bool {
+        let mut g = self.grants.lock().unwrap();
+        let Some(x) = g.origins.get_mut(origin) else { return false };
+        let before = x.folders.len();
+        x.folders.retain(|f| f.id != id);
+        let changed = x.folders.len() != before;
+        if changed {
+            self.save_grants(&g);
+            drop(g);
+            self.emit(UiEvent::Changed);
+        }
+        changed
+    }
+
+    /// The folder grant for (origin, id), if the origin still holds it.
+    pub fn folder(&self, origin: &str, id: &str) -> Option<FolderGrant> {
+        let g = self.grants.lock().unwrap();
+        g.origins.get(origin)?.folders.iter().find(|f| f.id == id).cloned()
+    }
+
     /// Set (Some) or clear (None) a per-site sandbox byte quota.
     pub fn set_site_quota(&self, origin: &str, quota: Option<u64>) {
         let mut g = self.grants.lock().unwrap();
@@ -424,9 +565,12 @@ impl AppState {
         let mut v: Vec<Value> = g
             .origins
             .iter()
+            .filter(|(_, x)| x.valid()) // expired grants are gone; don't list them
             .map(|(o, x)| {
                 json!({"origin": o, "perms": x.perms, "created": x.created,
-                       "last_used": x.last_used, "launch_allow": x.launch_allow, "quota": x.quota})
+                       "last_used": x.last_used, "launch_allow": x.launch_allow, "quota": x.quota,
+                       "expires": x.expires, "expires_in": x.expires_in(), "session": x.session,
+                       "folders": x.folders})
             })
             .collect();
         v.sort_by_key(|x| std::cmp::Reverse(x["last_used"].as_u64().unwrap_or(0)));
@@ -549,8 +693,15 @@ impl AppState {
                 eprintln!("[conduit] DENIED ({kind} is never auto-approved): {origin}");
                 return ConsentAnswer::deny();
             }
+            // A folder pick needs a path; take it from --pick-folder or deny.
+            if kind == "folder" {
+                return match &self.cfg.pick_folder {
+                    Some(p) => ConsentAnswer { allow: true, path: p.to_string_lossy().into_owned(), ..Default::default() },
+                    None => ConsentAnswer::deny(),
+                };
+            }
             eprintln!("[conduit] ALLOWED (--yes): {kind} {origin} {detail}");
-            return ConsentAnswer { allow: true, perms, remember: false };
+            return ConsentAnswer { allow: true, perms, ..Default::default() };
         }
         // One outstanding prompt per origin+kind; a page can't stack 50 dialogs.
         let dup = self
@@ -603,7 +754,7 @@ impl AppState {
             }
         });
         match tokio::time::timeout(CONSENT_TIMEOUT, ask).await {
-            Ok(Ok(true)) => ConsentAnswer { allow: true, perms, remember: false },
+            Ok(Ok(true)) => ConsentAnswer { allow: true, perms, ..Default::default() },
             _ => ConsentAnswer::deny(),
         }
     }

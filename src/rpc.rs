@@ -193,6 +193,98 @@ async fn dispatch_inner(ctx: &Ctx, method: &str, params: &Value) -> R {
             need(ctx, "hostfs")?;
             host_modify(ctx, method, params).await
         }
+        "folder.pick" => {
+            need(ctx, "folder")?;
+            folder_pick(ctx, params).await
+        }
+        "folder.granted" => {
+            need(ctx, "folder")?;
+            Ok(json!({"folders": ctx.grant.folders.iter().map(|f| json!({
+                "id": f.id, "name": f.name, "path": f.path, "read_only": f.read_only
+            })).collect::<Vec<_>>()}))
+        }
+        "folder.forget" => {
+            need(ctx, "folder")?;
+            Ok(json!({"forgotten": ctx.state.forget_folder(&ctx.origin, s(params, "id")?)}))
+        }
+        "folder.list" => {
+            need(ctx, "folder")?;
+            let (_, rt) = folder_root(ctx, params)?;
+            let rel = params.get("path").and_then(Value::as_str).unwrap_or("");
+            let dir = resolve_or_root(&rt, rel)?;
+            list_dir(&rt, &dir)
+        }
+        "folder.stat" => {
+            need(ctx, "folder")?;
+            let (_, rt) = folder_root(ctx, params)?;
+            let p = resolve_or_root(&rt, s(params, "path")?)?;
+            Ok(stat_path(&p))
+        }
+        "folder.read" => {
+            need(ctx, "folder")?;
+            let (_, rt) = folder_root(ctx, params)?;
+            let p = sandbox::resolve(&rt, s(params, "path")?).map_err(|e| err("bad_path", e))?;
+            read_path(&p, ctx.state.cfg.max_file, params)
+        }
+        "folder.write" => {
+            need(ctx, "folder")?;
+            let (fg, rt) = folder_root(ctx, params)?;
+            if fg.read_only {
+                return Err(err("denied", "this folder was granted read-only"));
+            }
+            let p = sandbox::resolve(&rt, s(params, "path")?).map_err(|e| err("bad_path", e))?;
+            let bytes = decode(params)?;
+            let append = params.get("append").and_then(Value::as_bool).unwrap_or(false);
+            write_path(&rt, &p, &bytes, append, ctx.state.cfg.max_file)
+        }
+        "folder.mkdir" => {
+            need(ctx, "folder")?;
+            let (fg, rt) = folder_root(ctx, params)?;
+            if fg.read_only {
+                return Err(err("denied", "this folder was granted read-only"));
+            }
+            let p = resolve_or_root(&rt, s(params, "path")?)?;
+            std::fs::create_dir_all(&p).map_err(|e| err("io", e.to_string()))?;
+            Ok(json!({"path": sandbox::rel_display(&rt, &p)}))
+        }
+        "folder.delete" => {
+            need(ctx, "folder")?;
+            let (fg, rt) = folder_root(ctx, params)?;
+            if fg.read_only {
+                return Err(err("denied", "this folder was granted read-only"));
+            }
+            let p = sandbox::resolve(&rt, s(params, "path")?).map_err(|e| err("bad_path", e))?;
+            if p == rt {
+                return Err(err("bad_path", "cannot delete the folder root"));
+            }
+            let md = std::fs::symlink_metadata(&p).map_err(|e| err("not_found", e.to_string()))?;
+            let recursive = params.get("recursive").and_then(Value::as_bool).unwrap_or(false);
+            let r = if md.is_dir() {
+                if recursive { std::fs::remove_dir_all(&p) } else { std::fs::remove_dir(&p) }
+            } else {
+                std::fs::remove_file(&p)
+            };
+            r.map_err(|e| err("io", e.to_string()))?;
+            Ok(json!({"deleted": sandbox::rel_display(&rt, &p)}))
+        }
+        "folder.move" => {
+            need(ctx, "folder")?;
+            let (fg, rt) = folder_root(ctx, params)?;
+            if fg.read_only {
+                return Err(err("denied", "this folder was granted read-only"));
+            }
+            let from = sandbox::resolve(&rt, s(params, "from")?).map_err(|e| err("bad_path", e))?;
+            let to = sandbox::resolve(&rt, s(params, "to")?).map_err(|e| err("bad_path", e))?;
+            std::fs::metadata(&from).map_err(|e| err("not_found", e.to_string()))?;
+            if to.exists() && !params.get("overwrite").and_then(Value::as_bool).unwrap_or(false) {
+                return Err(err("exists", "destination exists; pass overwrite:true"));
+            }
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| err("io", e.to_string()))?;
+            }
+            std::fs::rename(&from, &to).map_err(|e| err("io", e.to_string()))?;
+            Ok(json!({"from": sandbox::rel_display(&rt, &from), "to": sandbox::rel_display(&rt, &to)}))
+        }
         "sys.elevation" => Ok(json!({"elevated": system::is_elevated()})),
         "sys.elevate" => {
             need(ctx, "system")?;
@@ -434,16 +526,35 @@ fn fs_write(ctx: &Ctx, params: &Value) -> R {
 fn fs_read(ctx: &Ctx, params: &Value) -> R {
     let rt = root(ctx)?;
     let path = sandbox::resolve(&rt, s(params, "path")?).map_err(|e| err("bad_path", e))?;
-    let md = std::fs::metadata(&path).map_err(|e| err("not_found", e.to_string()))?;
+    read_path(&path, ctx.state.cfg.max_file, params)
+}
+
+fn fs_list(ctx: &Ctx, params: &Value) -> R {
+    let rt = root(ctx)?;
+    let rel = params.get("path").and_then(Value::as_str).unwrap_or("");
+    let dir = resolve_or_root(&rt, rel)?;
+    list_dir(&rt, &dir)
+}
+
+fn fs_stat(ctx: &Ctx, params: &Value) -> R {
+    let rt = root(ctx)?;
+    let p = resolve_or_root(&rt, s(params, "path")?)?;
+    Ok(stat_path(&p))
+}
+
+// --- helpers shared by the sandbox (fs.*) and granted folders (folder.*) ---
+
+/// Read a file as utf8 or base64, capped at `max` bytes.
+fn read_path(path: &Path, max: u64, params: &Value) -> R {
+    let md = std::fs::metadata(path).map_err(|e| err("not_found", e.to_string()))?;
     if !md.is_file() {
         return Err(err("not_found", "not a file"));
     }
-    if md.len() > ctx.state.cfg.max_file {
+    if md.len() > max {
         return Err(err("too_large", format!("{} bytes exceeds limit", md.len())));
     }
-    let bytes = std::fs::read(&path).map_err(|e| err("io", e.to_string()))?;
-    let want = params.get("encoding").and_then(Value::as_str).unwrap_or("utf8");
-    match want {
+    let bytes = std::fs::read(path).map_err(|e| err("io", e.to_string()))?;
+    match params.get("encoding").and_then(Value::as_str).unwrap_or("utf8") {
         "utf8" | "text" => match String::from_utf8(bytes) {
             Ok(t) => Ok(json!({"encoding": "utf8", "data": t, "size": md.len()})),
             Err(_) => Err(err("not_utf8", "file is not valid UTF-8; read it with encoding \"base64\"")),
@@ -457,11 +568,30 @@ fn fs_read(ctx: &Ctx, params: &Value) -> R {
     }
 }
 
-fn fs_list(ctx: &Ctx, params: &Value) -> R {
-    let rt = root(ctx)?;
-    let rel = params.get("path").and_then(Value::as_str).unwrap_or("");
-    let dir = resolve_or_root(&rt, rel)?;
-    let rd = std::fs::read_dir(&dir).map_err(|e| err("not_found", e.to_string()))?;
+/// Write bytes to a path under `root`, capped at `max`. No quota (used for host
+/// folders); the sandbox path (fs.write) keeps its own quota accounting.
+fn write_path(root: &Path, path: &Path, bytes: &[u8], append: bool, max: u64) -> R {
+    let existing = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let final_len = if append { existing + bytes.len() as u64 } else { bytes.len() as u64 };
+    if final_len > max {
+        return Err(err("too_large", format!("file would be {final_len} bytes, limit {max}")));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| err("io", e.to_string()))?;
+    }
+    if append {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| err("io", e.to_string()))?;
+        f.write_all(bytes).map_err(|e| err("io", e.to_string()))?;
+    } else {
+        std::fs::write(path, bytes).map_err(|e| err("io", e.to_string()))?;
+    }
+    Ok(json!({"path": sandbox::rel_display(root, path), "size": final_len}))
+}
+
+/// Directory listing with paths relative to `root`.
+fn list_dir(root: &Path, dir: &Path) -> R {
+    let rd = std::fs::read_dir(dir).map_err(|e| err("not_found", e.to_string()))?;
     let mut out = Vec::new();
     for e in rd.flatten() {
         let md = match e.metadata() {
@@ -470,7 +600,7 @@ fn fs_list(ctx: &Ctx, params: &Value) -> R {
         };
         out.push(json!({
             "name": e.file_name().to_string_lossy(),
-            "path": sandbox::rel_display(&rt, &e.path()),
+            "path": sandbox::rel_display(root, &e.path()),
             "dir": md.is_dir(),
             "size": if md.is_file() { md.len() } else { 0 },
         }));
@@ -478,19 +608,60 @@ fn fs_list(ctx: &Ctx, params: &Value) -> R {
     Ok(json!({"entries": out}))
 }
 
-fn fs_stat(ctx: &Ctx, params: &Value) -> R {
-    let rt = root(ctx)?;
-    let p = resolve_or_root(&rt, s(params, "path")?)?;
-    match std::fs::metadata(&p) {
-        Ok(md) => Ok(json!({
+fn stat_path(p: &Path) -> Value {
+    match std::fs::metadata(p) {
+        Ok(md) => json!({
             "exists": true, "dir": md.is_dir(),
             "size": if md.is_file() { md.len() } else { 0 },
             "modified": md.modified().ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as u64),
-        })),
-        Err(_) => Ok(json!({"exists": false})),
+        }),
+        Err(_) => json!({"exists": false}),
     }
+}
+
+// ---------------------------------------------------------------- folders
+
+/// The granted folder for the `id` param, plus its (still-present) root path.
+fn folder_root(ctx: &Ctx, params: &Value) -> Result<(crate::state::FolderGrant, PathBuf), RpcErr> {
+    let fg = ctx
+        .state
+        .folder(&ctx.origin, s(params, "id")?)
+        .ok_or_else(|| err("not_found", "no such folder grant"))?;
+    let root = PathBuf::from(&fg.path);
+    if !root.is_dir() {
+        return Err(err("not_found", "the granted folder no longer exists"));
+    }
+    Ok((fg, root))
+}
+
+async fn folder_pick(ctx: &Ctx, params: &Value) -> R {
+    let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    let read_only = params.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
+    let a = ctx
+        .state
+        .confirm("folder", &ctx.origin, name.to_string(), json!({"read_only": read_only}), vec![], false)
+        .await;
+    if !a.allow || a.path.is_empty() {
+        return Err(err("denied", "no folder was chosen"));
+    }
+    // Validate the chosen path with the host-fs rules (absolute, canonicalized,
+    // and the credential-store deny-list applies to picked folders too).
+    let picked = hostfs::resolve(&a.path, true).map_err(|e| err("bad_path", e))?;
+    if !picked.is_dir() {
+        return Err(err("bad_path", "the chosen path is not a folder"));
+    }
+    let fname = picked
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| picked.to_string_lossy().into_owned());
+    let path = picked.to_string_lossy().into_owned();
+    let id = ctx
+        .state
+        .add_folder(&ctx.origin, &fname, &path, read_only, a.session)
+        .ok_or_else(|| err("denied", "the grant is gone"))?;
+    Ok(json!({"id": id, "name": fname, "path": path, "read_only": read_only}))
 }
 
 fn fs_delete(ctx: &Ctx, params: &Value) -> R {

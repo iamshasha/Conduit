@@ -199,6 +199,7 @@ usage: conduit [options]
   --quota BYTES         per-origin sandbox cap (default 268435456)
   --yes                 auto-approve prompts except power/elevation (tests/kiosk)
   --deny                auto-deny consent prompts (headless hardening)
+  --pick-folder PATH    auto-answer folder picks with PATH (tests/kiosk, --yes)
   --url URL             conduit:// link that started us (only shows the window)";
 
 fn parse_args() -> Result<Opts, String> {
@@ -220,6 +221,7 @@ fn parse_args() -> Result<Opts, String> {
             "--quota" => cfg.quota = val()?.parse().map_err(|_| "bad --quota".to_string())?,
             "--yes" => cfg.auto_yes = true,
             "--deny" => cfg.deny_all = true,
+            "--pick-folder" => cfg.pick_folder = Some(PathBuf::from(val()?)),
             "--headless" => o.headless = true,
             "--minimized" => o.minimized = true,
             "--wait-port" => o.wait_port = true,
@@ -471,6 +473,7 @@ async fn pair(
     }
 
     let mut requested = requested;
+    let (mut expires, mut session) = (None, false);
     let pre = state.cfg.allow_origins.iter().any(|o| *o == origin);
     if !pre {
         let a = state
@@ -487,13 +490,17 @@ async fn pair(
             )
             .into_response();
         }
+        expires = a.expires;
+        session = a.session;
     }
     let token = state::random_token();
-    state.store_grant(&origin, &token, requested.clone());
-    eprintln!("[conduit] paired {origin} ({})", requested.join(","));
+    state.store_grant(&origin, &token, requested.clone(), expires, session);
+    let scope = if session { " (session)".into() } else { expires.map(|_| " (temporary)".to_string()).unwrap_or_default() };
+    eprintln!("[conduit] paired {origin} ({}){scope}", requested.join(","));
     (
         cors(&origin),
-        Json(json!({"ok": true, "result": {"token": token, "perms": requested}})),
+        Json(json!({"ok": true, "result": {"token": token, "perms": requested,
+                    "expires": expires, "session": session}})),
     )
         .into_response()
 }
@@ -563,7 +570,9 @@ async fn ws_upgrade(
 
 /// First frame must be `{"method":"auth","params":{"token":"..."}}`.
 async fn ws_session(state: Arc<AppState>, origin: String, mut socket: WebSocket) {
-    let mut grant = None;
+    // The token is kept so every request re-authenticates: a revoke or an
+    // expiry takes effect on an already-open socket, not just new ones.
+    let mut token: Option<String> = None;
     while let Some(Ok(msg)) = socket.recv().await {
         let text = match msg {
             Message::Text(t) => t.to_string(),
@@ -599,15 +608,15 @@ async fn ws_session(state: Arc<AppState>, origin: String, mut socket: WebSocket)
         let method = req.get("method").and_then(Value::as_str).unwrap_or("").to_string();
         let params = req.get("params").cloned().unwrap_or(json!({}));
 
-        if grant.is_none() {
+        if token.is_none() {
             // Nothing but auth is reachable before a valid token arrives.
-            let token = params.get("token").and_then(Value::as_str).unwrap_or("");
-            let ok = method == "auth" && !token.is_empty();
-            match ok.then(|| state.authenticate(&origin, token)).flatten() {
+            let tok = params.get("token").and_then(Value::as_str).unwrap_or("");
+            let ok = method == "auth" && !tok.is_empty();
+            match ok.then(|| state.authenticate(&origin, tok)).flatten() {
                 Some(g) => {
                     let out = json!({"id": id, "ok": true,
-                        "result": {"origin": origin, "perms": g.perms}});
-                    grant = Some(g);
+                        "result": {"origin": origin, "perms": g.perms, "expires_in": g.expires_in()}});
+                    token = Some(tok.to_string());
                     let _ = socket.send(Message::Text(out.to_string().into())).await;
                 }
                 None => {
@@ -620,11 +629,15 @@ async fn ws_session(state: Arc<AppState>, origin: String, mut socket: WebSocket)
             continue;
         }
 
-        let ctx = rpc::Ctx {
-            state: state.clone(),
-            origin: origin.clone(),
-            grant: grant.clone().expect("checked above"),
+        // Re-authenticate every request against the current grant, so a revoke
+        // or an expiry ends access on this open socket immediately.
+        let Some(grant) = state.authenticate(&origin, token.as_deref().unwrap()) else {
+            let out = json!({"id": id, "ok": false, "error": {"code": "unauthorized",
+                "message": "access was revoked or expired"}});
+            let _ = socket.send(Message::Text(out.to_string().into())).await;
+            break;
         };
+        let ctx = rpc::Ctx { state: state.clone(), origin: origin.clone(), grant };
         let out = match rpc::dispatch(&ctx, &method, &params).await {
             Ok(result) => json!({"id": id, "ok": true, "result": result}),
             Err(e) => json!({"id": id, "ok": false, "error": {"code": e.code, "message": e.message}}),
