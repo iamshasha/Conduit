@@ -48,7 +48,7 @@ impl ConsentWindow {
         // Closing the window denies whatever is showing.
         let w = this.clone();
         this.inner.borrow().window.connect_close_request(move |_| {
-            w.answer(false, vec![], false);
+            w.answer(false, vec![], false, "", "");
             gtk::Inhibit(false)
         });
         this
@@ -80,11 +80,12 @@ impl ConsentWindow {
         }
     }
 
-    fn answer(&self, allow: bool, perms: Vec<String>, remember: bool) {
+    fn answer(&self, allow: bool, perms: Vec<String>, remember: bool, scope: &str, path: &str) {
         let id = {
             let mut i = self.inner.borrow_mut();
             let Some(id) = i.current.take() else { return };
-            i.bus.send(json!({"cmd": "consent", "id": id, "allow": allow, "perms": perms, "remember": remember}));
+            i.bus.send(json!({"cmd": "consent", "id": id, "allow": allow, "perms": perms,
+                              "remember": remember, "scope": scope, "path": path}));
             id
         };
         let _ = id;
@@ -164,6 +165,22 @@ impl ConsentWindow {
             }
         }
 
+        // Pairing: choose how long the grant lasts.
+        let scope_codes = ["session", "1h", "1d", "always"];
+        let scope_dd = gtk::DropDown::from_strings(&[
+            &t("scope_session"), &t("scope_1h"), &t("scope_1d"), &t("scope_always"),
+        ]);
+        scope_dd.set_selected(3); // default: always
+        if kind == "pair" {
+            let row = GBox::new(Orientation::Horizontal, 8);
+            row.set_margin_top(6);
+            let lbl = Label::new(Some(&t("grant_for")));
+            lbl.set_xalign(0.0);
+            row.append(&lbl);
+            row.append(&scope_dd);
+            body.append(&row);
+        }
+
         // "Remember" for the kinds that support it.
         let remember = CheckButton::with_label(&t("remember"));
         if matches!(kind.as_str(), "pair" | "launch") {
@@ -174,31 +191,65 @@ impl ConsentWindow {
         buttons.set_halign(Align::End);
         buttons.set_margin_top(8);
         let deny = Button::with_label(&t("deny"));
-        let allow = Button::with_label(&t("allow"));
-        allow.add_css_class("suggested-action");
-        allow.set_sensitive(false); // armed after a short delay
         buttons.append(&deny);
-        buttons.append(&allow);
+
+        let this = self.clone();
+        deny.connect_clicked(move |_| this.answer(false, vec![], false, "", ""));
+
+        if kind == "folder" {
+            // A folder request is answered by choosing a folder, not by "Allow".
+            let choose = Button::with_label(&t("choose_folder"));
+            choose.add_css_class("suggested-action");
+            buttons.append(&choose);
+            let this = self.clone();
+            let win = window.clone();
+            choose.connect_clicked(move |_| {
+                let chooser = gtk::FileChooserNative::new(
+                    Some(&t("choose_folder")),
+                    Some(&win),
+                    gtk::FileChooserAction::SelectFolder,
+                    Some(&t("choose_folder")),
+                    Some(&t("cancel")),
+                );
+                let ch = chooser.clone();
+                let this = this.clone();
+                chooser.connect_response(move |_, resp| {
+                    if resp == gtk::ResponseType::Accept {
+                        if let Some(p) = ch.file().and_then(|f| f.path()) {
+                            this.answer(true, vec![], false, "", p.to_string_lossy().as_ref());
+                        }
+                    }
+                    ch.destroy();
+                });
+                chooser.show();
+            });
+        } else {
+            let allow = Button::with_label(&t("allow"));
+            allow.add_css_class("suggested-action");
+            allow.set_sensitive(false); // armed after a short delay
+            buttons.append(&allow);
+            let allow2 = allow.clone();
+            glib::timeout_add_local_once(Duration::from_millis(700), move || allow2.set_sensitive(true));
+
+            let this = self.clone();
+            let pc = perm_checks.clone();
+            let rem = remember.clone();
+            let kind2 = kind.clone();
+            allow.connect_clicked(move |_| {
+                let perms: Vec<String> = if kind2 == "pair" {
+                    pc.borrow().iter().filter(|(_, c)| c.is_active()).map(|(n, _)| n.clone()).collect()
+                } else {
+                    req_perms(&kind2)
+                };
+                let scope = if kind2 == "pair" {
+                    scope_codes.get(scope_dd.selected() as usize).copied().unwrap_or("always")
+                } else {
+                    ""
+                };
+                this.answer(true, perms, rem.is_active(), scope, "");
+            });
+        }
         body.append(&buttons);
-
-        let allow2 = allow.clone();
-        glib::timeout_add_local_once(Duration::from_millis(700), move || allow2.set_sensitive(true));
-
-        let this = self.clone();
-        deny.connect_clicked(move |_| this.answer(false, vec![], false));
-
-        let this = self.clone();
-        let pc = perm_checks.clone();
-        let rem = remember.clone();
-        let kind2 = kind.clone();
-        allow.connect_clicked(move |_| {
-            let perms: Vec<String> = if kind2 == "pair" {
-                pc.borrow().iter().filter(|(_, c)| c.is_active()).map(|(n, _)| n.clone()).collect()
-            } else {
-                req_perms(&kind2)
-            };
-            this.answer(true, perms, rem.is_active());
-        });
 
         window.present();
     }

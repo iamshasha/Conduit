@@ -554,6 +554,10 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
             state.remember_launch(origin, msg["path"].as_str().unwrap_or(""), false);
             refresh();
         }
+        "forget_folder" => {
+            state.forget_folder(origin, msg["id"].as_str().unwrap_or(""));
+            refresh();
+        }
         "open_sandbox" => {
             let dir = state.sites_root().join(crate::sandbox::origin_key(origin));
             let _ = std::fs::create_dir_all(&dir);
