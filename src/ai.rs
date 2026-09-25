@@ -6,7 +6,78 @@
 //! URL over HTTP. Read-mostly: list models, generate text, chat.
 
 use serde_json::{json, Value};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
+
+// ----------------------------------------------------------------- job control
+//
+// The one-key setup runs on a single background thread. A tiny atomic state
+// machine lets the UI (a) refuse a second concurrent run, so the button can be
+// clicked twice with no ill effect, and (b) pause / resume / stop the transfer.
+// The worker polls this between chunks via `gate`.
+
+const IDLE: u8 = 0;
+const RUNNING: u8 = 1;
+const PAUSE_REQ: u8 = 2;
+const CANCEL_REQ: u8 = 3;
+static JOB: AtomicU8 = AtomicU8::new(IDLE);
+
+/// Claim the single job slot. Returns false if one is already active, so a
+/// duplicate click is a no-op instead of a second download.
+pub fn try_begin() -> bool {
+    JOB.compare_exchange(IDLE, RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+}
+
+/// Release the slot when the job ends (success, error or cancel).
+pub fn finish() {
+    JOB.store(IDLE, Ordering::SeqCst);
+}
+
+pub fn request_pause() {
+    let _ = JOB.compare_exchange(RUNNING, PAUSE_REQ, Ordering::SeqCst, Ordering::SeqCst);
+}
+pub fn request_resume() {
+    let _ = JOB.compare_exchange(PAUSE_REQ, RUNNING, Ordering::SeqCst, Ordering::SeqCst);
+}
+pub fn request_cancel() {
+    // Cancel an active job (running or paused). Leave IDLE untouched so a later
+    // run can still claim the slot — a store here would strand the state.
+    let _ = JOB.compare_exchange(RUNNING, CANCEL_REQ, Ordering::SeqCst, Ordering::SeqCst);
+    let _ = JOB.compare_exchange(PAUSE_REQ, CANCEL_REQ, Ordering::SeqCst, Ordering::SeqCst);
+}
+
+/// Marker error the worker returns when the user stops the job.
+const CANCELLED: &str = "__cancelled__";
+
+/// Checkpoint between chunks: block while paused, and abort on cancel. Emits a
+/// `paused`/`resumed` event once per transition so the UI can reflect it.
+fn gate(on_event: &dyn Fn(Value)) -> Result<(), String> {
+    let mut announced = false;
+    loop {
+        match JOB.load(Ordering::SeqCst) {
+            CANCEL_REQ => return Err(CANCELLED.into()),
+            PAUSE_REQ => {
+                if !announced {
+                    on_event(json!({"stage": "paused"}));
+                    announced = true;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            _ => {
+                if announced {
+                    on_event(json!({"stage": "resumed"}));
+                }
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// Small helper to stream one terminal-log line to the UI.
+fn log(on_event: &dyn Fn(Value), line: impl Into<String>) {
+    on_event(json!({"stage": "log", "line": line.into()}));
+}
 
 /// Endpoint base, default Ollama. Set in Settings → persisted as `ai_endpoint`.
 pub fn endpoint(cfg_endpoint: &str) -> String {
@@ -143,19 +214,24 @@ const OLLAMA_SETUP_URL: &str = "https://ollama.com/download/OllamaSetup.exe";
 pub fn setup(base: &str, model: &str, on_event: &dyn Fn(Value)) -> Result<(), String> {
     let base = endpoint(base);
     let model = if model.trim().is_empty() { DEFAULT_MODEL } else { model.trim() };
+    log(on_event, format!("Target model: {model}"));
 
     // Already up? Skip straight to the model pull.
-    let online = get(&format!("{base}/api/tags"), 3).is_ok();
-    if !online {
+    if get(&format!("{base}/api/tags"), 3).is_ok() {
+        log(on_event, "A local AI server is already running.");
+    } else {
         #[cfg(windows)]
-        {
+        if !ollama_installed() {
             install_ollama(on_event)?;
-            wait_online(&base, on_event)?;
         }
-        #[cfg(not(windows))]
-        {
+        // Installed (now or before) but not answering: start its server, then
+        // wait for it to come up. On non-Windows this is the only step — we
+        // never install a runtime the user didn't put there.
+        if !ollama_installed() {
             return Err("start Ollama first (ollama.com/download)".into());
         }
+        start_server(on_event);
+        wait_online(&base, on_event)?;
     }
 
     on_event(json!({"stage": "pull", "model": model, "pct": 0}));
@@ -164,41 +240,63 @@ pub fn setup(base: &str, model: &str, on_event: &dyn Fn(Value)) -> Result<(), St
     Ok(())
 }
 
-/// Download the Ollama installer (reporting download percent) and run it
+/// Locate the Ollama CLI. On Windows the installer drops it under LocalAppData;
+/// everywhere else we trust the PATH.
+fn ollama_bin() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let p = PathBuf::from(local).join("Programs").join("Ollama").join("ollama.exe");
+        if p.is_file() {
+            return p;
+        }
+    }
+    PathBuf::from("ollama")
+}
+
+/// Is the Ollama CLI present? `--version` answers even when the server is down.
+fn ollama_installed() -> bool {
+    std::process::Command::new(ollama_bin())
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Best-effort: launch `ollama serve`. If the desktop app already runs a server
+/// this exits at once with "address already in use", which is harmless — we
+/// wait for whichever server ends up listening.
+fn start_server(on_event: &dyn Fn(Value)) {
+    log(on_event, "Starting the Ollama server…");
+    let mut cmd = std::process::Command::new(ollama_bin());
+    cmd.arg("serve")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+    if let Err(e) = cmd.spawn() {
+        log(on_event, format!("Could not launch the server directly: {e}"));
+    }
+}
+
+/// Download the Ollama installer (resumable, reporting percent) and run it
 /// silently, waiting for it to finish.
 #[cfg(windows)]
 fn install_ollama(on_event: &dyn Fn(Value)) -> Result<(), String> {
-    use std::io::{Read, Write};
-    on_event(json!({"stage": "download", "pct": 0}));
-
-    // The installer is ~1.5 GB; long_agent avoids a total-body deadline.
-    let mut resp = long_agent().get(OLLAMA_SETUP_URL).call().map_err(|e| format!("could not download Ollama: {e}"))?;
-    let total: u64 = resp
-        .headers()
-        .get("content-length")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-
+    log(on_event, "Downloading the Ollama installer…");
     let path = std::env::temp_dir().join("OllamaSetup.exe");
-    let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-    let mut reader = resp.body_mut().as_reader();
-    let mut buf = [0u8; 64 * 1024];
-    let mut done: u64 = 0;
-    loop {
-        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
-        }
-        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-        done += n as u64;
-        if total > 0 {
-            on_event(json!({"stage": "download", "pct": (done * 100 / total).min(100)}));
-        }
-    }
-    drop(file);
+    resumable_download(OLLAMA_SETUP_URL, &path, on_event)?;
 
     on_event(json!({"stage": "install"}));
+    log(on_event, "Running the installer (silent)…");
     // Inno Setup silent switches: no UI, no prompts, no reboot.
     let status = std::process::Command::new(&path)
         .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
@@ -207,52 +305,223 @@ fn install_ollama(on_event: &dyn Fn(Value)) -> Result<(), String> {
     if !status.success() {
         return Err("the Ollama installer did not complete".into());
     }
+    log(on_event, "Installer finished.");
     Ok(())
 }
 
-/// Poll the endpoint until Ollama's server answers (it starts itself after
-/// install), up to ~60s.
+/// Stream a file to disk with pause / resume / cancel support. Pausing drops the
+/// connection and resuming re-requests with a `Range` header from the byte we
+/// reached, so a paused download does not hold a socket open for minutes. If the
+/// server ignores `Range` we transparently restart from zero.
 #[cfg(windows)]
+fn resumable_download(url: &str, path: &std::path::Path, on_event: &dyn Fn(Value)) -> Result<(), String> {
+    use std::io::{Read, Write};
+    // Resume across app restarts too: keep whatever bytes are already on disk.
+    let mut have: u64 = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let mut total: u64 = 0;
+    on_event(json!({"stage": "download", "pct": 0, "done": have, "total": total}));
+
+    loop {
+        gate(on_event)?; // blocks while paused, aborts on cancel
+
+        let mut req = long_agent().get(url);
+        if have > 0 {
+            req = req.header("Range", format!("bytes={have}-"));
+        }
+        let mut resp = req.call().map_err(|e| format!("could not download Ollama: {e}"))?;
+        let partial = resp.status().as_u16() == 206;
+        let clen: u64 = resp
+            .headers()
+            .get("content-length")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        let mut file = if partial {
+            total = have + clen;
+            std::fs::OpenOptions::new().append(true).open(path).map_err(|e| e.to_string())?
+        } else {
+            // Whole body: the server ignored our Range, so start over.
+            have = 0;
+            total = clen;
+            std::fs::File::create(path).map_err(|e| e.to_string())?
+        };
+
+        let mut reader = resp.body_mut().as_reader();
+        let mut buf = [0u8; 64 * 1024];
+        let mut paused = false;
+        loop {
+            match JOB.load(Ordering::SeqCst) {
+                CANCEL_REQ => {
+                    drop(file);
+                    let _ = std::fs::remove_file(path);
+                    return Err(CANCELLED.into());
+                }
+                PAUSE_REQ => {
+                    paused = true; // drop the stream; resume re-Ranges from `have`
+                    break;
+                }
+                _ => {}
+            }
+            let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+            have += n as u64;
+            if total > 0 {
+                on_event(json!({"stage": "download", "pct": (have * 100 / total).min(100), "done": have, "total": total}));
+            }
+        }
+        drop(file);
+        if paused {
+            continue; // loop back into gate(), which will block until resume/cancel
+        }
+        if total == 0 || have >= total {
+            log(on_event, "Download complete.");
+            return Ok(());
+        }
+        // Connection ended early: loop to resume from where we stopped.
+        log(on_event, "Connection dropped — resuming…");
+    }
+}
+
+/// Poll the endpoint until the server answers. Tolerant of a slow first start
+/// and of Ollama self-upgrading ("upgrade in progress"), waiting up to ~2 min.
 fn wait_online(base: &str, on_event: &dyn Fn(Value)) -> Result<(), String> {
     on_event(json!({"stage": "starting"}));
-    for _ in 0..30 {
+    for i in 0..60 {
+        gate(on_event)?; // allow cancel while waiting
         if get(&format!("{base}/api/tags"), 3).is_ok() {
+            log(on_event, "Server is up.");
             return Ok(());
+        }
+        if i % 5 == 4 {
+            log(on_event, format!("Waiting for the server… ({}s)", (i + 1) * 2));
         }
         std::thread::sleep(Duration::from_secs(2));
     }
-    Err("Ollama was installed but its server did not start".into())
+    Err("the AI server did not start in time".into())
 }
 
-/// Stream a model pull from Ollama, forwarding download percent. Ollama returns
-/// newline-delimited JSON objects carrying `completed`/`total` byte counts.
+/// Stream a model pull from Ollama, forwarding download percent and status
+/// lines. Ollama returns newline-delimited JSON with `completed`/`total` byte
+/// counts and a `status` string.
+///
+/// The pull can be paused, resumed and cancelled; because Ollama caches each
+/// downloaded blob, dropping the stream and re-issuing the request simply
+/// continues from where it left off. If Ollama is self-upgrading it answers
+/// "upgrade in progress" — treated as transient, we wait and retry rather than
+/// failing the whole setup.
 fn pull(base: &str, model: &str, on_event: &dyn Fn(Value)) -> Result<(), String> {
     use std::io::{BufRead, BufReader};
-    let resp = long_agent()
-        .post(&format!("{base}/api/pull"))
-        .send_json(json!({"model": model, "stream": true}))
-        .map_err(|e| friendly(&e))?;
-    let reader = BufReader::new(resp.into_body().into_reader());
-    for line in reader.lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let v: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
+    let mut transient = 0u32;
+    let mut last_status = String::new();
+    'connect: loop {
+        gate(on_event)?; // block if paused, abort on cancel
+
+        let resp = match long_agent()
+            .post(&format!("{base}/api/pull"))
+            .send_json(json!({"model": model, "stream": true}))
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // Server briefly unreachable (restarting mid-upgrade): wait a bit
+                // and retry, up to ~2 min, before giving up.
+                if transient < 60 {
+                    transient += 1;
+                    log(on_event, "Waiting for the server to be ready…");
+                    std::thread::sleep(Duration::from_secs(2));
+                    continue 'connect;
+                }
+                return Err(friendly(&e));
+            }
         };
-        if let Some(err) = v["error"].as_str() {
-            return Err(err.to_string());
+        let reader = BufReader::new(resp.into_body().into_reader());
+        for line in reader.lines() {
+            match JOB.load(Ordering::SeqCst) {
+                CANCEL_REQ => return Err(CANCELLED.into()),
+                PAUSE_REQ => continue 'connect, // gate() at the top parks us
+                _ => {}
+            }
+            let line = line.map_err(|e| e.to_string())?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let v: Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if let Some(err) = v["error"].as_str() {
+                if err.to_lowercase().contains("upgrade") {
+                    log(on_event, format!("{err} — retrying shortly…"));
+                    std::thread::sleep(Duration::from_secs(3));
+                    continue 'connect;
+                }
+                return Err(err.to_string());
+            }
+            if let Some(status) = v["status"].as_str() {
+                if status != last_status {
+                    log(on_event, status);
+                    last_status = status.to_string();
+                }
+                if status == "success" {
+                    return Ok(());
+                }
+            }
+            let (completed, total) = (v["completed"].as_u64(), v["total"].as_u64());
+            if let (Some(c), Some(t)) = (completed, total) {
+                if t > 0 {
+                    on_event(json!({"stage": "pull", "model": model, "pct": (c * 100 / t).min(100), "done": c, "total": t}));
+                }
+            }
         }
-        let (completed, total) = (v["completed"].as_u64(), v["total"].as_u64());
-        let pct = match (completed, total) {
-            (Some(c), Some(t)) if t > 0 => (c * 100 / t).min(100),
-            _ => continue,
-        };
-        on_event(json!({"stage": "pull", "model": model, "pct": pct}));
+        // Stream ended without an explicit "success" line: the model is present.
+        return Ok(());
     }
-    Ok(())
+}
+
+/// On-disk models directory (OLLAMA_MODELS, else ~/.ollama/models).
+pub fn models_dir() -> Option<PathBuf> {
+    std::env::var_os("OLLAMA_MODELS")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".ollama").join("models")))
+}
+
+/// Storage picture for the Settings → Storage AI section: whether Ollama is
+/// installed, its models with sizes, the models-folder path and its size.
+pub fn ollama_info(base: &str) -> Value {
+    let base = endpoint(base);
+    let installed = ollama_installed();
+
+    // Models + live sizes come from the running server; fall back to just the
+    // installed flag when it is offline.
+    let mut models: Vec<Value> = Vec::new();
+    let mut online = false;
+    if let Ok(body) = get(&format!("{base}/api/tags"), 3) {
+        if let Ok(v) = serde_json::from_str::<Value>(&body) {
+            online = true;
+            if let Some(arr) = v["models"].as_array() {
+                models = arr
+                    .iter()
+                    .map(|m| json!({"name": m["name"].as_str().unwrap_or(""), "size": m["size"].as_u64().unwrap_or(0)}))
+                    .collect();
+            }
+        }
+    }
+    let models_total: u64 = models.iter().filter_map(|m| m["size"].as_u64()).sum();
+
+    let dir = models_dir();
+    let disk = dir.as_ref().filter(|p| p.is_dir()).map(|p| crate::sandbox::usage(p).0).unwrap_or(0);
+
+    json!({
+        "installed": installed || online,
+        "online": online,
+        "models": models,
+        "models_size": models_total,
+        "disk_size": disk,
+        "models_dir": dir.as_ref().map(|p| p.to_string_lossy().to_string()),
+    })
 }
 
 /// One-shot completion. `model` required; `prompt` required; `system` optional.

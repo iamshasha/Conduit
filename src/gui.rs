@@ -96,6 +96,9 @@ pub fn run(state: Arc<AppState>, rt: tokio::runtime::Runtime, listener: std::net
 
             Event::UserEvent(UserEvent::GuiDown) => {
                 link.down();
+                // A closed/crashed GUI can't drive or watch an AI setup; stop it
+                // so a paused job never parks a worker thread forever.
+                crate::ai::request_cancel();
                 // A crashed GUI can't answer: never leave a prompt dangling.
                 for r in state.pending_consents() {
                     state.answer(r.id, ConsentAnswer::default());
@@ -394,6 +397,12 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         // streaming progress. Heavy and user-initiated (downloads/installs a
         // vendor runtime), so it runs off the UI thread.
         "ai_setup" => {
+            // Refuse a second concurrent run so a double-click can't start two
+            // downloads. The atomic claim is the authority, not the button state.
+            if !crate::ai::try_begin() {
+                link.send_if_up(json!({"type": "toast", "data": "ai_setup_busy"}));
+                return;
+            }
             let base = state.settings().ai_endpoint;
             let model = msg["model"].as_str().unwrap_or("").to_string();
             let tx = link.sender();
@@ -410,7 +419,23 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                             let _ = t.send(json!({"type": "ai_status", "data": crate::ai::status(&base)}).to_string());
                         }
                     }
+                    // The user stopping the job is not an error to shout about.
+                    Err(ref e) if e == "__cancelled__" => emit(json!({"stage": "cancelled"})),
                     Err(e) => emit(json!({"stage": "error", "error": e})),
+                }
+                crate::ai::finish();
+            });
+        }
+        "ai_setup_pause" => crate::ai::request_pause(),
+        "ai_setup_resume" => crate::ai::request_resume(),
+        "ai_setup_cancel" => crate::ai::request_cancel(),
+        // Ollama storage picture for Settings → Storage (on demand: scans a dir).
+        "ai_storage" => {
+            let base = state.settings().ai_endpoint;
+            let tx = link.sender();
+            link.rt.spawn_blocking(move || {
+                if let Some(t) = &tx {
+                    let _ = t.send(json!({"type": "ai_storage", "data": crate::ai::ollama_info(&base)}).to_string());
                 }
             });
         }
@@ -623,6 +648,10 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
             toast(system::reveal(&dir, false));
         }
         "open_data" => toast(system::reveal(&state.cfg.data_dir, false)),
+        "open_models_dir" => match crate::ai::models_dir() {
+            Some(dir) if dir.is_dir() => toast(system::reveal(&dir, false)),
+            _ => link.send_if_up(json!({"type": "toast", "data": "ai_storage_none"})),
+        },
         "protocol" => {
             toast(system::set_protocol(msg["on"].as_bool().unwrap_or(false)));
             refresh();
