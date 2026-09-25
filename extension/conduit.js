@@ -14,7 +14,7 @@
   }
 
   const DEFAULT_PORT = 8765;
-  const PERMS = ['fs', 'hw', 'launch', 'system', 'process', 'power', 'clipboard', 'notify', 'folder'];
+  const PERMS = ['fs', 'hw', 'launch', 'system', 'process', 'power', 'clipboard', 'notify', 'folder', 'shell'];
 
   class Conduit {
     constructor() {
@@ -344,6 +344,15 @@
           { opcode: 'isAdmin', blockType: Scratch.BlockType.BOOLEAN, text: 'running as administrator?' },
           { opcode: 'requestAdmin', blockType: Scratch.BlockType.COMMAND, text: 'request administrator rights' },
           '---',
+          // Allow-listed PowerShell (read-only cmdlets only; risky ones prompt).
+          { opcode: 'runCommand', blockType: Scratch.BlockType.REPORTER,
+            text: 'run command [CMD] with args [ARGS]',
+            arguments: {
+              CMD: { type: Scratch.ArgumentType.STRING, defaultValue: 'Get-Date' },
+              ARGS: { type: Scratch.ArgumentType.STRING, defaultValue: '' },
+            } },
+          { opcode: 'shellCommands', blockType: Scratch.BlockType.REPORTER, text: 'allowed commands as JSON' },
+          '---',
           // Host folders the user picks once, then the project reads/writes inside.
           { opcode: 'pickFolder', blockType: Scratch.BlockType.REPORTER,
             text: 'ask for a folder named [NAME] (returns its id)',
@@ -550,6 +559,17 @@
     }
     changedFiles() {
       return JSON.stringify(this._lastChanges || []);
+    }
+
+    // --- allow-listed PowerShell ---
+    async runCommand(args) {
+      const argv = Scratch.Cast.toString(args.ARGS).split(' ').filter((x) => x.length > 0);
+      const r = await this.soft('shell.run', { command: Scratch.Cast.toString(args.CMD), args: argv }, null);
+      return r ? r.output : (this.lastError || '');
+    }
+    async shellCommands() {
+      const r = await this.soft('shell.commands', {}, { commands: [] });
+      return JSON.stringify(r.commands || []);
     }
 
     revealFile(args) {

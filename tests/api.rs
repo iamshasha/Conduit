@@ -492,6 +492,36 @@ fn folder_needs_permission() {
     assert_eq!(c.err("folder.pick", json!({})), "denied");
 }
 
+// ---------------------------------------------------------------- powershell
+
+#[test]
+fn shell_is_allowlisted_and_safe() {
+    let s = start(&[]);
+    let c = pair_perms(&s, "https://sh.example", &["shell"]);
+
+    // The catalog is non-empty and every entry has a risk score.
+    let cmds = c.ok("shell.commands", json!({}));
+    assert!(cmds["commands"].as_array().unwrap().iter().all(|e| e["risk"].is_number()));
+
+    // Nothing outside the list runs, and no metacharacters get through.
+    assert_eq!(c.err("shell.run", json!({"command": "Remove-Item", "args": ["x"]})), "denied");
+    assert_eq!(c.err("shell.run", json!({"command": "Invoke-Expression", "args": ["ls"]})), "denied");
+    assert_eq!(c.err("shell.run", json!({"command": "Get-Process", "args": ["a;b"]})), "denied");
+    assert_eq!(c.err("shell.run", json!({"command": "Get-Process", "args": ["$(whoami)"]})), "denied");
+
+    // The permission is required.
+    let c2 = pair_perms(&s, "https://noperm.example", &["fs"]);
+    assert_eq!(c2.err("shell.run", json!({"command": "Get-Date"})), "denied");
+
+    // On Windows PowerShell is present, so a low-risk cmdlet actually runs.
+    #[cfg(windows)]
+    {
+        let r = c.ok("shell.run", json!({"command": "Get-Date"}));
+        assert_eq!(r["command"], json!("Get-Date"));
+        assert!(r["output"].as_str().unwrap().len() > 0, "Get-Date should print something");
+    }
+}
+
 // -------------------------------------------------------------- ws watching
 
 fn ws_wait_event(

@@ -28,6 +28,7 @@ mod gui;
 mod hostfs;
 mod rpc;
 mod sandbox;
+mod shell;
 mod state;
 mod system;
 mod update;
@@ -372,6 +373,7 @@ async fn health() -> impl IntoResponse {
                         "host.roots","host.list","host.stat","host.read","host.write","host.delete","host.mkdir","host.move",
                         "folder.pick","folder.granted","folder.list","folder.read","folder.write","folder.stat","folder.mkdir","folder.delete","folder.move","folder.forget",
                         "watch","unwatch",
+                        "shell.commands","shell.run",
                         "crypto.encrypt","crypto.decrypt","ai.status","ai.generate"],
         })),
     )

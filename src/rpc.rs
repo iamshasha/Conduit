@@ -464,6 +464,19 @@ async fn dispatch_inner(ctx: &Ctx, method: &str, params: &Value) -> R {
             let text = blocking(move || crate::ai::generate(&base, &model, &prompt, system.as_deref())).await?;
             Ok(json!({"text": text}))
         }
+        "shell.commands" => {
+            need(ctx, "shell")?;
+            let list: Vec<Value> = crate::shell::catalog()
+                .into_iter()
+                .map(|(c, r)| json!({"command": c, "risk": r,
+                    "needs_consent": r >= crate::shell::CONSENT_THRESHOLD}))
+                .collect();
+            Ok(json!({"commands": list, "threshold": crate::shell::CONSENT_THRESHOLD}))
+        }
+        "shell.run" => {
+            need(ctx, "shell")?;
+            shell_run(ctx, params).await
+        }
         "revoke" => {
             ctx.state.revoke(&ctx.origin);
             Ok(json!({"revoked": true}))
@@ -634,6 +647,39 @@ fn folder_root(ctx: &Ctx, params: &Value) -> Result<(crate::state::FolderGrant, 
         return Err(err("not_found", "the granted folder no longer exists"));
     }
     Ok((fg, root))
+}
+
+/// Run an allow-listed PowerShell cmdlet. Risky ones ask for consent first.
+async fn shell_run(ctx: &Ctx, params: &Value) -> R {
+    let command = s(params, "command")?;
+    let args: Vec<String> = params
+        .get("args")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let (cmdlet, risk, args) = crate::shell::validate(command, &args).map_err(|e| err("denied", e))?;
+
+    // A light rate limit so a page can't spin up shells in a loop.
+    if !ctx.state.throttle(&format!("shell:{}", ctx.origin), Duration::from_millis(500)) {
+        return Err(err("rate_limited", "one shell command every 0.5 s"));
+    }
+
+    // Show the exact command that will run in the prompt.
+    let shown = if args.is_empty() { cmdlet.to_string() } else { format!("{cmdlet} {}", args.join(" ")) };
+    if risk >= crate::shell::CONSENT_THRESHOLD {
+        let a = ctx
+            .state
+            .confirm("shell", &ctx.origin, shown.clone(), json!({"command": cmdlet, "risk": risk}), vec![], false)
+            .await;
+        if !a.allow {
+            return Err(err("denied", "the command was refused"));
+        }
+    }
+
+    let cmdlet_owned = cmdlet.to_string();
+    let out = blocking(move || crate::shell::run(&cmdlet_owned, &args)).await?;
+    Ok(json!({"command": cmdlet, "risk": risk, "exit_code": out.exit_code,
+              "output": out.text, "truncated": out.truncated}))
 }
 
 async fn folder_pick(ctx: &Ctx, params: &Value) -> R {
