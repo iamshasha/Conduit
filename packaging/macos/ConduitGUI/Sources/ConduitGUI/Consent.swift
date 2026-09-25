@@ -7,7 +7,7 @@ import SwiftUI
 final class ConsentState: ObservableObject {
     @Published var current: JSON = .null
     @Published var allowArmed = false
-    var onAnswer: ((_ allow: Bool, _ perms: [String], _ remember: Bool) -> Void)?
+    var onAnswer: ((_ allow: Bool, _ perms: [String], _ remember: Bool, _ scope: String, _ path: String) -> Void)?
 }
 
 final class ConsentController: NSObject, NSWindowDelegate {
@@ -21,8 +21,8 @@ final class ConsentController: NSObject, NSWindowDelegate {
     init(model: AppModel) {
         self.model = model
         super.init()
-        state.onAnswer = { [weak self] allow, perms, remember in
-            self?.answer(allow: allow, perms: perms, remember: remember)
+        state.onAnswer = { [weak self] allow, perms, remember, scope, path in
+            self?.answer(allow: allow, perms: perms, remember: remember, scope: scope, path: path)
         }
     }
 
@@ -40,13 +40,15 @@ final class ConsentController: NSObject, NSWindowDelegate {
         if currentId == rid { currentId = nil; showNext() }
     }
 
-    private func answer(allow: Bool, perms: [String], remember: Bool) {
+    private func answer(allow: Bool, perms: [String], remember: Bool, scope: String, path: String) {
         guard let rid = currentId else { return }
         model.cmd("consent", [
             "id": .number(Double(rid)),
             "allow": .bool(allow),
             "perms": .array(perms.map { .string($0) }),
             "remember": .bool(remember),
+            "scope": .string(scope),
+            "path": .string(path),
         ])
         currentId = nil
         showNext()
@@ -83,7 +85,7 @@ final class ConsentController: NSObject, NSWindowDelegate {
     // Clicking the window's close button denies whatever is showing; the window
     // itself is kept for the next prompt (showNext hides it when the queue empties).
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        answer(allow: false, perms: [], remember: false)
+        answer(allow: false, perms: [], remember: false, scope: "", path: "")
         return false
     }
 }
@@ -92,6 +94,11 @@ private struct ConsentView: View {
     @ObservedObject var state: ConsentState
     @State private var perms: [String: Bool] = [:]
     @State private var remember = false
+    @State private var scope = "always"
+
+    private let scopes: [(String, String)] = [
+        ("session", "scope_session"), ("1h", "scope_1h"), ("1d", "scope_1d"), ("always", "scope_always"),
+    ]
 
     var body: some View {
         let req = state.current
@@ -114,6 +121,9 @@ private struct ConsentView: View {
                         ))
                     }
                 }
+                Picker(Loc.t("grant_for"), selection: $scope) {
+                    ForEach(scopes, id: \.0) { code, key in Text(Loc.t(key)).tag(code) }
+                }
             }
             if kind == "pair" || kind == "launch" {
                 Toggle(Loc.t("remember"), isOn: $remember)
@@ -121,20 +131,38 @@ private struct ConsentView: View {
 
             HStack {
                 Spacer()
-                Button(Loc.t("deny")) { state.onAnswer?(false, [], false) }
+                Button(Loc.t("deny")) { state.onAnswer?(false, [], false, "", "") }
                     .keyboardShortcut(.cancelAction)
-                Button(Loc.t("allow")) {
-                    let picked = kind == "pair" ? pairPerms.filter { perms[$0] ?? true } : []
-                    state.onAnswer?(true, picked, remember)
+                if kind == "folder" {
+                    // A folder request is answered by choosing a folder.
+                    Button(Loc.t("choose_folder")) { chooseFolder() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!state.allowArmed)
+                } else {
+                    Button(Loc.t("allow")) {
+                        let picked = kind == "pair" ? pairPerms.filter { perms[$0] ?? true } : []
+                        state.onAnswer?(true, picked, remember, kind == "pair" ? scope : "", "")
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!state.allowArmed)
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!state.allowArmed)
             }
         }
         .padding(20)
         .frame(width: 420)
         .environment(\.layoutDirection, Loc.rtl ? .rightToLeft : .leftToRight)
-        .onChange(of: idValue) { _ in perms = [:]; remember = false }
+        .onChange(of: idValue) { _ in perms = [:]; remember = false; scope = "always" }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = Loc.t("choose_folder")
+        if panel.runModal() == .OK, let url = panel.url {
+            state.onAnswer?(true, [], false, "", url.path)
+        }
     }
 
     private var idValue: Double { Double(state.current["id"].int64 ?? 0) }

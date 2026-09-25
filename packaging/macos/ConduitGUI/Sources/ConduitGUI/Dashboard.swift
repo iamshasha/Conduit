@@ -1,5 +1,7 @@
 import SwiftUI
 import Combine
+import AppKit
+import UniformTypeIdentifiers
 
 private enum Page: String, CaseIterable, Identifiable {
     case overview, sites, activity, settings
@@ -179,13 +181,19 @@ private struct SiteCard: View {
     var body: some View {
         let origin = grant["origin"].string ?? ""
         let granted = Set(grant["perms"].array.compactMap { $0.string })
+        let folders = grant["folders"].array
         return Card {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text(Fmt.host(origin)).font(.headline)
                     Spacer()
                     Button(Loc.t("open_sandbox")) { model.cmd("open_sandbox", ["origin": .string(origin)]) }
+                    Button(Loc.t("export_files")) { model.cmd("export_site", ["origin": .string(origin)]) }
+                    Button(Loc.t("import_files")) { importZip(origin: origin) }
                     Button(Loc.t("revoke"), role: .destructive) { model.cmd("revoke", ["origin": .string(origin)]) }
+                }
+                if let exp = expiryText() {
+                    Text("\(Loc.t("expires_label")) · \(exp)").font(.caption).foregroundStyle(.secondary)
                 }
                 Divider()
                 ForEach(allPerms, id: \.self) { p in
@@ -202,7 +210,45 @@ private struct SiteCard: View {
                     ))
                     .toggleStyle(.switch)
                 }
+                if !folders.isEmpty {
+                    Divider()
+                    Text(Loc.t("folders_title")).font(.caption).foregroundStyle(.secondary)
+                    ForEach(Array(folders.enumerated()), id: \.offset) { _, f in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(f["name"].string ?? "").font(.callout)
+                                Text(f["path"].string ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            }
+                            if f["read_only"].boolValue {
+                                Text(Loc.t("read_only")).font(.caption2).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(Loc.t("forget")) {
+                                model.cmd("forget_folder", ["origin": .string(origin), "id": .string(f["id"].string ?? "")])
+                            }
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    private func expiryText() -> String? {
+        if grant["session"].boolValue { return Loc.t("session_only") }
+        guard let s = grant["expires_in"].int64 else { return nil }
+        if s >= 86_400 { return "\(s / 86_400)d" }
+        if s >= 3_600 { return "\(s / 3_600)h" }
+        return "\(max(1, s / 60))m"
+    }
+
+    private func importZip(origin: String) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.zip]
+        if panel.runModal() == .OK, let url = panel.url {
+            model.cmd("import_site", ["origin": .string(origin), "path": .string(url.path)])
         }
     }
 }
