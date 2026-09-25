@@ -737,8 +737,10 @@ fn handle_watch(
         let wid = *next_watch;
         *next_watch += 1;
         let (st, origin, token, tx) = (state.clone(), origin.to_string(), token.to_string(), out_tx.clone());
+        // Snapshot the baseline before acking so a write the client makes right
+        // after `watch` returns is guaranteed to diff against a prior state.
+        let mut prev = watch::scan(&root);
         let handle = tokio::spawn(async move {
-            let mut prev = watch::scan(&root);
             loop {
                 tokio::time::sleep(WATCH_INTERVAL).await;
                 // Stop pushing the moment access is gone.
