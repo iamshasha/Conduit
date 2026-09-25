@@ -141,6 +141,7 @@ impl ConsentWindow {
             "clipboard" => tf("consent_clipboard", &o),
             "elevate" => tf("consent_elevate", &o),
             "hostwrite" => tf("consent_hostwrite", &[("origin", origin.as_str()), ("verb", detail.as_str())]),
+            "folder" => tf("consent_folder", &o),
             _ => format!("{kind} {detail}"),
         };
         let msg = Label::new(Some(&ask));

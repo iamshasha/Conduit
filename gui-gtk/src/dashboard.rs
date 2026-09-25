@@ -230,7 +230,7 @@ fn sites(bus: &Bus, d: &Value) -> ScrolledWindow {
         let exp = if g["session"].as_bool() == Some(true) {
             Some(t("session_only"))
         } else {
-            g["expires_in"].as_u64().map(|s| tf("expires_in", &[("time", &fmt_dur(s))]))
+            g["expires_in"].as_u64().map(fmt_dur)
         };
         if let Some(txt) = exp {
             let e = Label::new(Some(&format!("{} · {txt}", t("expires_label"))));
