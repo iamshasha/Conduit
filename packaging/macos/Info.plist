@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Conduit</string>
+  <key>CFBundleDisplayName</key>
+  <string>Conduit</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.conduit.app</string>
+  <key>CFBundleVersion</key>
+  <string>__VERSION__</string>
+  <key>CFBundleShortVersionString</key>
+  <string>__VERSION__</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <!-- The core (tray/menu-bar agent) is the app's executable; it spawns the
+       Swift window process as a sibling in Contents/MacOS. -->
+  <key>CFBundleExecutable</key>
+  <string>conduit</string>
+  <key>CFBundleIconFile</key>
+  <string>conduit</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <!-- Menu-bar agent: no Dock icon. -->
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <!-- Declares the conduit:// URL scheme so links open this app. -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>com.conduit.app</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>conduit</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>

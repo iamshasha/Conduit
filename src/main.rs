@@ -22,14 +22,17 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod ai;
+mod archive;
 mod crypto;
 mod gui;
 mod hostfs;
 mod rpc;
 mod sandbox;
+mod shell;
 mod state;
 mod system;
 mod update;
+mod watch;
 
 use axum::extract::{ws::Message, ws::WebSocket, DefaultBodyLimit, State, WebSocketUpgrade};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
@@ -37,6 +40,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
 use state::{AppState, Config, UiEvent};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,6 +48,7 @@ use std::sync::Arc;
 const EXTENSION_JS: &str = include_str!("../extension/conduit.js");
 const TEST_PAGE: &str = include_str!("../web/test.html");
 const TW_TEST_PAGE: &str = include_str!("../web/tw-test.html");
+const WELCOME_PAGE: &str = include_str!("../web/welcome.html");
 
 pub struct Opts {
     pub cfg: Config,
@@ -54,6 +59,12 @@ pub struct Opts {
 }
 
 fn main() {
+    // Velopack's lifecycle hook must run before anything else: on Windows it
+    // handles the installer's post-install / update / uninstall callbacks and may
+    // restart or exit the process. A no-op during normal launches.
+    #[cfg(windows)]
+    velopack::VelopackApp::build().run();
+
     let opts = match parse_args() {
         Ok(o) => o,
         Err(e) => {
@@ -94,9 +105,31 @@ fn main() {
     if opts.headless {
         rt.block_on(serve(state, listener));
     } else {
+        // The actual port (may differ from cfg when --port 0 picked a free one).
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or(opts.cfg.port);
+        maybe_open_welcome(&state, port);
         let show = !opts.minimized || opts.url.is_some();
         gui::run(state, rt, listener, show);
     }
+}
+
+/// On the very first launch, open the onboarding page in the default browser.
+/// A marker in the data dir makes this happen exactly once; the page stays
+/// reachable at /welcome afterwards.
+fn maybe_open_welcome(state: &Arc<AppState>, port: u16) {
+    let marker = state.cfg.data_dir.join("welcome.seen");
+    if marker.exists() {
+        return;
+    }
+    if std::fs::write(&marker, b"1").is_err() {
+        return; // can't record it — better to skip than to nag on every start
+    }
+    let url = format!("http://127.0.0.1:{port}/welcome");
+    std::thread::spawn(move || {
+        // Give the server a moment to accept connections first.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let _ = system::open_url(&url);
+    });
 }
 
 /// Bind the loopback port, optionally waiting for a previous instance (the
@@ -147,6 +180,7 @@ pub async fn serve(state: Arc<AppState>, listener: std::net::TcpListener) {
         .route("/turbowarp/extension.js", get(extension_js))
         .route("/test", get(test_page))
         .route("/test/extension", get(tw_test_page))
+        .route("/welcome", get(welcome_page))
         .layer(DefaultBodyLimit::max(48 * 1024 * 1024))
         .with_state(state.clone());
 
@@ -175,6 +209,7 @@ usage: conduit [options]
   --quota BYTES         per-origin sandbox cap (default 268435456)
   --yes                 auto-approve prompts except power/elevation (tests/kiosk)
   --deny                auto-deny consent prompts (headless hardening)
+  --pick-folder PATH    auto-answer folder picks with PATH (tests/kiosk, --yes)
   --url URL             conduit:// link that started us (only shows the window)";
 
 fn parse_args() -> Result<Opts, String> {
@@ -196,6 +231,7 @@ fn parse_args() -> Result<Opts, String> {
             "--quota" => cfg.quota = val()?.parse().map_err(|_| "bad --quota".to_string())?,
             "--yes" => cfg.auto_yes = true,
             "--deny" => cfg.deny_all = true,
+            "--pick-folder" => cfg.pick_folder = Some(PathBuf::from(val()?)),
             "--headless" => o.headless = true,
             "--minimized" => o.minimized = true,
             "--wait-port" => o.wait_port = true,
@@ -341,6 +377,9 @@ async fn health() -> impl IntoResponse {
                         "sys.media","sys.volume","sys.volume.set","sys.media.info","sys.media.control","sys.open_url","sys.processes","sys.kill","sys.power",
                         "sys.elevation","sys.elevate","sys.gpu","clipboard.write","clipboard.read","notify",
                         "host.roots","host.list","host.stat","host.read","host.write","host.delete","host.mkdir","host.move",
+                        "folder.pick","folder.granted","folder.list","folder.read","folder.write","folder.stat","folder.mkdir","folder.delete","folder.move","folder.forget",
+                        "watch","unwatch",
+                        "shell.commands","shell.run",
                         "crypto.encrypt","crypto.decrypt","ai.status","ai.generate"],
         })),
     )
@@ -405,6 +444,14 @@ async fn tw_test_page() -> impl IntoResponse {
     )
 }
 
+/// The first-run onboarding page (also reachable any time from the dashboard).
+async fn welcome_page() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))],
+        WELCOME_PAGE,
+    )
+}
+
 /// Ask the human to grant this origin a set of permissions, and hand back a
 /// bearer token on success. The token is shown to the page exactly once; only
 /// its SHA-256 is written to disk.
@@ -439,6 +486,7 @@ async fn pair(
     }
 
     let mut requested = requested;
+    let (mut expires, mut session) = (None, false);
     let pre = state.cfg.allow_origins.iter().any(|o| *o == origin);
     if !pre {
         let a = state
@@ -455,13 +503,17 @@ async fn pair(
             )
             .into_response();
         }
+        expires = a.expires;
+        session = a.session;
     }
     let token = state::random_token();
-    state.store_grant(&origin, &token, requested.clone());
-    eprintln!("[conduit] paired {origin} ({})", requested.join(","));
+    state.store_grant(&origin, &token, requested.clone(), expires, session);
+    let scope = if session { " (session)".into() } else { expires.map(|_| " (temporary)".to_string()).unwrap_or_default() };
+    eprintln!("[conduit] paired {origin} ({}){scope}", requested.join(","));
     (
         cors(&origin),
-        Json(json!({"ok": true, "result": {"token": token, "perms": requested}})),
+        Json(json!({"ok": true, "result": {"token": token, "perms": requested,
+                    "expires": expires, "session": session}})),
     )
         .into_response()
 }
@@ -529,37 +581,51 @@ async fn ws_upgrade(
     })
 }
 
+const MAX_WATCH_PER_SOCKET: usize = 4;
+const WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
+
 /// First frame must be `{"method":"auth","params":{"token":"..."}}`.
+///
+/// One task owns the socket. Request responses and pushed `fs.change` events
+/// both flow through an mpsc channel, so a background watcher can push while the
+/// request loop keeps reading.
 async fn ws_session(state: Arc<AppState>, origin: String, mut socket: WebSocket) {
-    let mut grant = None;
-    while let Some(Ok(msg)) = socket.recv().await {
-        let text = match msg {
-            Message::Text(t) => t.to_string(),
-            Message::Binary(_) => {
-                let _ = socket.send(Message::Text(
-                    r#"{"ok":false,"error":{"code":"bad_params","message":"send JSON text frames"}}"#.into(),
-                )).await;
+    use std::collections::HashMap;
+    // The token is kept so every request re-authenticates: a revoke or an
+    // expiry takes effect on an already-open socket, not just new ones.
+    let mut token: Option<String> = None;
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
+    let mut watchers: HashMap<u64, tokio::task::JoinHandle<()>> = HashMap::new();
+    let mut next_watch: u64 = 1;
+
+    loop {
+        let text = tokio::select! {
+            // Queued outbound (responses + events).
+            Some(line) = out_rx.recv() => {
+                if socket.send(Message::Text(line.into())).await.is_err() { break; }
                 continue;
             }
-            Message::Close(_) => break,
-            _ => continue,
+            inbound = socket.recv() => match inbound {
+                Some(Ok(Message::Text(t))) => t.to_string(),
+                Some(Ok(Message::Binary(_))) => {
+                    let _ = out_tx.send(r#"{"ok":false,"error":{"code":"bad_params","message":"send JSON text frames"}}"#.to_string());
+                    continue;
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                Some(Ok(_)) => continue,
+            },
         };
         if text.len() > 48 * 1024 * 1024 {
             break;
         }
         if !state.rate_ok(&origin) {
-            let _ = socket
-                .send(Message::Text(
-                    r#"{"ok":false,"error":{"code":"rate_limited","message":"slow down"}}"#.into(),
-                ))
-                .await;
+            let _ = out_tx.send(r#"{"ok":false,"error":{"code":"rate_limited","message":"slow down"}}"#.to_string());
             continue;
         }
         let req: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(e) => {
-                let out = json!({"ok": false, "error": {"code": "bad_json", "message": e.to_string()}});
-                let _ = socket.send(Message::Text(out.to_string().into())).await;
+                let _ = out_tx.send(json!({"ok": false, "error": {"code": "bad_json", "message": e.to_string()}}).to_string());
                 continue;
             }
         };
@@ -567,42 +633,132 @@ async fn ws_session(state: Arc<AppState>, origin: String, mut socket: WebSocket)
         let method = req.get("method").and_then(Value::as_str).unwrap_or("").to_string();
         let params = req.get("params").cloned().unwrap_or(json!({}));
 
-        if grant.is_none() {
+        if token.is_none() {
             // Nothing but auth is reachable before a valid token arrives.
-            let token = params.get("token").and_then(Value::as_str).unwrap_or("");
-            let ok = method == "auth" && !token.is_empty();
-            match ok.then(|| state.authenticate(&origin, token)).flatten() {
+            let tok = params.get("token").and_then(Value::as_str).unwrap_or("");
+            let ok = method == "auth" && !tok.is_empty();
+            match ok.then(|| state.authenticate(&origin, tok)).flatten() {
                 Some(g) => {
-                    let out = json!({"id": id, "ok": true,
-                        "result": {"origin": origin, "perms": g.perms}});
-                    grant = Some(g);
-                    let _ = socket.send(Message::Text(out.to_string().into())).await;
+                    let _ = out_tx.send(json!({"id": id, "ok": true,
+                        "result": {"origin": origin, "perms": g.perms, "expires_in": g.expires_in()}}).to_string());
+                    token = Some(tok.to_string());
                 }
                 None => {
-                    let out = json!({"id": id, "ok": false, "error": {"code": "unauthorized",
-                        "message": "first frame must be auth with a valid token"}});
-                    let _ = socket.send(Message::Text(out.to_string().into())).await;
+                    let _ = out_tx.send(json!({"id": id, "ok": false, "error": {"code": "unauthorized",
+                        "message": "first frame must be auth with a valid token"}}).to_string());
                     break;
                 }
             }
             continue;
         }
 
-        let ctx = rpc::Ctx {
-            state: state.clone(),
-            origin: origin.clone(),
-            grant: grant.clone().expect("checked above"),
+        // Re-authenticate every request against the current grant, so a revoke
+        // or an expiry ends access on this open socket immediately.
+        let Some(grant) = state.authenticate(&origin, token.as_deref().unwrap()) else {
+            let _ = out_tx.send(json!({"id": id, "ok": false, "error": {"code": "unauthorized",
+                "message": "access was revoked or expired"}}).to_string());
+            break;
         };
+
+        // watch / unwatch are socket-scoped (they push events), so they live
+        // here rather than in the shared dispatcher.
+        if method == "watch" || method == "unwatch" {
+            let out = handle_watch(&state, &origin, token.as_deref().unwrap(), &grant, &method, &params,
+                                   &out_tx, &mut watchers, &mut next_watch);
+            let _ = out_tx.send(json!({"id": id, "ok": out.is_ok(),
+                "result": out.clone().ok(), "error": out.err()}).to_string());
+            state.log(&origin, &method, true, "");
+            continue;
+        }
+
+        let ctx = rpc::Ctx { state: state.clone(), origin: origin.clone(), grant };
         let out = match rpc::dispatch(&ctx, &method, &params).await {
             Ok(result) => json!({"id": id, "ok": true, "result": result}),
             Err(e) => json!({"id": id, "ok": false, "error": {"code": e.code, "message": e.message}}),
         };
-        if socket.send(Message::Text(out.to_string().into())).await.is_err() {
-            break;
-        }
+        let _ = out_tx.send(out.to_string());
         if method == "revoke" {
             break;
         }
+    }
+    // Flush any response queued just before we broke out of the loop (e.g. an
+    // unauthorized error), which the select branch never got to drain.
+    while let Ok(line) = out_rx.try_recv() {
+        if socket.send(Message::Text(line.into())).await.is_err() {
+            break;
+        }
+    }
+    for (_, h) in watchers {
+        h.abort();
+    }
+}
+
+/// Start or stop a watcher. Returns the JSON result body on success, or an
+/// {code,message} error object on failure.
+#[allow(clippy::too_many_arguments)]
+fn handle_watch(
+    state: &Arc<AppState>,
+    origin: &str,
+    token: &str,
+    grant: &state::Grant,
+    method: &str,
+    params: &Value,
+    out_tx: &mpsc::UnboundedSender<String>,
+    watchers: &mut std::collections::HashMap<u64, tokio::task::JoinHandle<()>>,
+    next_watch: &mut u64,
+) -> Result<Value, Value> {
+    let e = |code: &str, msg: &str| json!({"code": code, "message": msg});
+    if method == "unwatch" {
+        let wid = params.get("watch").and_then(Value::as_u64).unwrap_or(0);
+        Ok(json!({"stopped": watchers.remove(&wid).map(|h| { h.abort(); true }).unwrap_or(false)}))
+    } else {
+        if watchers.len() >= MAX_WATCH_PER_SOCKET {
+            return Err(e("too_many", "too many watches on this socket"));
+        }
+        // Resolve the target root and check the matching permission.
+        let scope = params.get("scope").and_then(Value::as_str).unwrap_or("sandbox");
+        let root = match scope {
+            "sandbox" => {
+                if !grant.has("fs") {
+                    return Err(e("denied", "the fs permission is required"));
+                }
+                sandbox::origin_root(state, origin).map_err(|_| e("io", "sandbox unavailable"))?
+            }
+            "folder" => {
+                if !grant.has("folder") {
+                    return Err(e("denied", "the folder permission is required"));
+                }
+                let id = params.get("id").and_then(Value::as_str).unwrap_or("");
+                let f = grant.folders.iter().find(|f| f.id == id).ok_or_else(|| e("not_found", "no such folder grant"))?;
+                std::path::PathBuf::from(&f.path)
+            }
+            _ => return Err(e("bad_params", "scope must be \"sandbox\" or \"folder\"")),
+        };
+        let wid = *next_watch;
+        *next_watch += 1;
+        let (st, origin, token, tx) = (state.clone(), origin.to_string(), token.to_string(), out_tx.clone());
+        let handle = tokio::spawn(async move {
+            let mut prev = watch::scan(&root);
+            loop {
+                tokio::time::sleep(WATCH_INTERVAL).await;
+                // Stop pushing the moment access is gone.
+                if st.authenticate(&origin, &token).is_none() {
+                    let _ = tx.send(json!({"event": "watch.stopped", "watch": wid, "reason": "revoked"}).to_string());
+                    break;
+                }
+                let now = watch::scan(&root);
+                let changes = watch::diff(&prev, &now);
+                if !changes.is_empty() {
+                    let arr: Vec<Value> = changes.iter().map(|(p, k)| json!({"path": p, "kind": k})).collect();
+                    if tx.send(json!({"event": "fs.change", "watch": wid, "changes": arr}).to_string()).is_err() {
+                        break; // socket closed
+                    }
+                }
+                prev = now;
+            }
+        });
+        watchers.insert(wid, handle);
+        Ok(json!({"watch": wid, "scope": scope}))
     }
 }
 

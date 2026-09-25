@@ -31,3 +31,22 @@ jobs:
 
       - name: Test
         run: cargo test --release
+
+  # Compile-check the macOS Swift GUI so it can't drift from the core protocol.
+  macos-gui:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Swift GUI
+        run: ./packaging/macos/build-gui.sh
+
+  # Compile-check the WinUI GUI (build only, no publish) for the same reason.
+  winui-gui:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Build WinUI GUI
+        run: dotnet build gui-winui/Conduit.Gui.csproj -c Release -p:Platform=x64

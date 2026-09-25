@@ -70,6 +70,12 @@ pub fn resolve(root: &Path, rel: &str) -> Result<PathBuf, String> {
     if rel.contains('\0') {
         return Err("NUL in path".into());
     }
+    // Web paths use forward slashes. A backslash is never legitimate here and is
+    // a UNC/drive-letter tell on Windows, so reject it on every platform — not
+    // just where the OS happens to treat it as a separator.
+    if rel.contains('\\') {
+        return Err("backslash not allowed in path".into());
+    }
     // Reject anything the OS could read as rooted before we even split.
     let raw = Path::new(rel);
     for c in raw.components() {
@@ -78,7 +84,7 @@ pub fn resolve(root: &Path, rel: &str) -> Result<PathBuf, String> {
             _ => return Err("path must be relative with no '..'".into()),
         }
     }
-    let parts: Vec<&str> = rel.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = rel.split('/').filter(|s| !s.is_empty()).collect();
     if parts.is_empty() || parts.len() > MAX_DEPTH {
         return Err("path depth".into());
     }

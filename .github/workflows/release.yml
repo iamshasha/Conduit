@@ -1,6 +1,8 @@
 name: release
 
-# Push a tag like v0.1.0 to build installers and attach them to a GitHub Release.
+# Push a tag like v0.1.0 to build packages for each OS and attach them to a
+# GitHub Release. Also runnable on demand (workflow_dispatch) for a dry run —
+# the publish job only runs when a tag triggered it.
 on:
   push:
     tags: ["v*"]
@@ -10,50 +12,164 @@ permissions:
   contents: write
 
 jobs:
-  windows:
+  # -------------------------------------------------- Windows x64 (Velopack)
+  # The primary Windows installer: a Velopack Setup.exe plus the update feed
+  # (RELEASES/*.nupkg) that the app's built-in updater reads.
+  windows-x64:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            rust: x86_64-pc-windows-msvc
-            rid: win-x64
-          - arch: arm64
-            rust: aarch64-pc-windows-msvc
-            rid: win-arm64
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust }}
-
+          targets: x86_64-pc-windows-msvc
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
 
       - name: Build core
-        run: cargo build --release --target ${{ matrix.rust }}
+        run: cargo build --release --target x86_64-pc-windows-msvc
 
       - name: Publish GUI
-        run: dotnet publish gui-winui -c Release -r ${{ matrix.rid }} -o gui-winui/publish
+        run: dotnet publish gui-winui -c Release -r win-x64 -o gui-winui/publish
 
-      - name: Assemble
+      - name: Read version
+        id: ver
         shell: pwsh
         run: |
-          $out = "Conduit-${{ matrix.arch }}"
-          New-Item -ItemType Directory -Force "$out/gui" | Out-Null
-          Copy-Item "target/${{ matrix.rust }}/release/conduit.exe" "$out/"
-          Copy-Item "gui-winui/publish/*" "$out/gui/" -Recurse
-          Compress-Archive -Path "$out/*" -DestinationPath "$out.zip" -Force
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Stage payload
+        shell: pwsh
+        run: |
+          $stage = "stage-x64"
+          New-Item -ItemType Directory -Force "$stage/gui" | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/conduit.exe" "$stage/"
+          Copy-Item "gui-winui/publish/*" "$stage/gui/" -Recurse
+
+      - name: Velopack pack
+        shell: pwsh
+        run: |
+          dotnet tool install -g vpk
+          $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          vpk pack `
+            --packId Conduit `
+            --packTitle Conduit `
+            --packAuthors Conduit `
+            --packVersion ${{ steps.ver.outputs.version }} `
+            --packDir stage-x64 `
+            --mainExe conduit.exe `
+            --icon gui-winui/app.ico `
+            --channel win-x64 `
+            --outputDir dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Conduit-${{ matrix.arch }}
-          path: Conduit-${{ matrix.arch }}.zip
+          name: windows-x64
+          path: dist/*
 
+  # ----------------------------------------------- Windows arm64 (portable)
+  # Velopack's arm64 story is still thin, so arm64 ships as a portable zip.
+  windows-arm64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Build core
+        run: cargo build --release --target aarch64-pc-windows-msvc
+      - name: Publish GUI
+        run: dotnet publish gui-winui -c Release -r win-arm64 -o gui-winui/publish
+      - name: Assemble portable zip
+        shell: pwsh
+        run: |
+          $out = "Conduit-arm64"
+          New-Item -ItemType Directory -Force "$out/gui" | Out-Null
+          Copy-Item "target/aarch64-pc-windows-msvc/release/conduit.exe" "$out/"
+          Copy-Item "gui-winui/publish/*" "$out/gui/" -Recurse
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "$out/*" -DestinationPath "dist/Conduit-arm64-portable.zip" -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64
+          path: dist/*
+
+  # ------------------------------------------------------------------ Linux
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Desktop deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev \
+            libxdo-dev libssl-dev libgtk-4-dev librsvg2-bin dpkg-dev
+
+      - name: Build binaries
+        run: |
+          cargo build --release
+          (cd gui-gtk && cargo build --release)
+
+      - name: Render icons
+        run: |
+          for s in 16 24 32 48 64 128 256 512; do
+            rsvg-convert -w $s -h $s assets/conduit.svg -o assets/conduit-$s.png
+          done
+
+      - name: Build .deb
+        run: ./packaging/linux/build-deb.sh
+
+      - name: Fetch appimagetool
+        run: |
+          curl -fsSL -o /tmp/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool
+
+      - name: Build AppImage
+        run: APPIMAGETOOL=/tmp/appimagetool ./packaging/linux/build-appimage.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  # ------------------------------------------------------------------ macOS
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+      - name: Icon deps
+        run: brew install librsvg
+      - name: Build universal core
+        run: |
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          mkdir -p target/universal
+          lipo -create -output target/universal/conduit \
+            target/x86_64-apple-darwin/release/conduit \
+            target/aarch64-apple-darwin/release/conduit
+      - name: Build Swift GUI
+        run: ./packaging/macos/build-gui.sh
+      - name: Assemble .app and .dmg
+        run: ./packaging/macos/build-dmg.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+
+  # ---------------------------------------------------------------- publish
   release:
-    needs: windows
+    needs: [windows-x64, windows-arm64, linux, macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -61,9 +177,9 @@ jobs:
         with: { path: dist, merge-multiple: true }
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
+          files: dist/*
           generate_release_notes: true
 
-# macOS (SwiftUI) and Linux (GTK) targets are intentionally absent: they need a
-# cross-platform core (system.rs, GPU, audio, media, elevation, autostart are
-# Win32/WinRT today). Add jobs here once those backends exist behind cfg gates.
+# Windows ships a Velopack Setup.exe + update feed (x64) and a portable zip
+# (arm64); Linux ships .deb + AppImage; macOS ships a .dmg. The app's built-in
+# updater reads the Velopack feed once the releases are publicly readable.

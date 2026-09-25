@@ -31,6 +31,8 @@ sealed class ConsentWindow : Window
     DateTime _deadline, _armedAt;
     CheckBox? _remember;
     List<CheckBox> _permBoxes = [];
+    ComboBox? _scopeBox;
+    string _pickedPath = "";
 
     public ConsentWindow()
     {
@@ -57,7 +59,18 @@ sealed class ConsentWindow : Window
         content.Children.Add(_slot);
 
         _deny.Click += (_, _) => Answer(false);
-        _allow.Click += (_, _) => Answer(true);
+        _allow.Click += async (_, _) =>
+        {
+            if (_cur is null || DateTime.UtcNow < _armedAt) return;
+            // A folder request is answered by choosing a folder, not by "Allow".
+            if (_cur["kind"]?.GetValue<string>() == "folder")
+            {
+                var path = await PickFolder();
+                if (string.IsNullOrEmpty(path)) return; // cancelled: keep the prompt
+                _pickedPath = path;
+            }
+            Answer(true);
+        };
         var esc = new KeyboardAccelerator { Key = VirtualKey.Escape };
         esc.Invoked += (_, e) => { e.Handled = true; Answer(false); };
         _deny.KeyboardAccelerators.Add(esc);
@@ -143,13 +156,29 @@ sealed class ConsentWindow : Window
             else if (req["perms"] is JsonArray asked)
                 foreach (var p in asked) perms.Add(p!.GetValue<string>());
         }
+        var scope = "always";
+        if (allow && req["kind"]?.GetValue<string>() == "pair" && _scopeBox?.SelectedItem is ComboBoxItem it)
+            scope = (string)it.Tag;
         Core.Cmd("consent", new JsonObject
         {
             ["id"] = id,
             ["allow"] = allow,
             ["perms"] = perms,
             ["remember"] = allow && _remember?.IsChecked == true,
+            ["scope"] = scope,
+            ["path"] = allow ? _pickedPath : "",
         });
+    }
+
+    /// Native folder picker, initialized against this window (WinUI 3 desktop).
+    async Task<string> PickFolder()
+    {
+        var picker = new Windows.Storage.Pickers.FolderPicker();
+        picker.FileTypeFilter.Add("*");
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+        var folder = await picker.PickSingleFolderAsync();
+        return folder?.Path ?? "";
     }
 
     void Answer(bool allow)
@@ -176,6 +205,8 @@ sealed class ConsentWindow : Window
         _cur = req;
         _remember = null;
         _permBoxes = [];
+        _scopeBox = null;
+        _pickedPath = "";
         var kind = req["kind"]?.GetValue<string>() ?? "";
         var origin = req["origin"]?.GetValue<string>() ?? "";
         var host = Ui.Host(origin);
@@ -202,6 +233,8 @@ sealed class ConsentWindow : Window
             "elevate" => Loc.T("consent_elevate", ("origin", host)),
             "power" => Loc.T("consent_power_" + (req["data"]?["action"]?.GetValue<string>() ?? ""), ("origin", host)),
             "hostwrite" => Loc.T("consent_hostwrite", ("origin", host), ("verb", hostVerb)),
+            "folder" => Loc.T("consent_folder", ("origin", host)),
+            "shell" => Loc.T("consent_shell", ("origin", host)),
             _ => Loc.T("consent_title"),
         };
 
@@ -217,7 +250,7 @@ sealed class ConsentWindow : Window
         FrameworkElement detail;
         if (kind == "pair")
         {
-            var list = new StackPanel { Spacing = 4 };
+            var list = new StackPanel { Spacing = 8 };
             list.Children.Add(Ui.Secondary(Loc.T("consent_pair_sub"), "BodyTextBlockStyle"));
             foreach (var p in (req["perms"] as JsonArray ?? []).Select(n => n!.GetValue<string>()))
             {
@@ -234,6 +267,19 @@ sealed class ConsentWindow : Window
                 _permBoxes.Add(box);
                 list.Children.Add(box);
             }
+            // One click to (re)check every requested permission.
+            var grantAll = new Button { Content = Loc.T("grant_all"), Margin = new Thickness(0, 4, 0, 0) };
+            grantAll.Click += (_, _) => { foreach (var b in _permBoxes) b.IsChecked = true; };
+            list.Children.Add(grantAll);
+            // How long the grant lasts.
+            var scopeRow = new StackPanel { Spacing = 4, Margin = new Thickness(0, 8, 0, 0) };
+            scopeRow.Children.Add(Ui.Secondary(Loc.T("grant_for")));
+            _scopeBox = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch };
+            foreach (var (code, key) in new[] { ("session", "scope_session"), ("1h", "scope_1h"), ("1d", "scope_1d"), ("always", "scope_always") })
+                _scopeBox.Items.Add(new ComboBoxItem { Content = Loc.T(key), Tag = code });
+            _scopeBox.SelectedIndex = 3;
+            scopeRow.Children.Add(_scopeBox);
+            list.Children.Add(scopeRow);
             detail = new ScrollViewer { Content = list };
         }
         else
@@ -282,7 +328,8 @@ sealed class ConsentWindow : Window
 
         _slot.Content = page;
         _deny.Content = Loc.T("deny");
-        _allow.Content = req["can_remember"]?.GetValue<bool>() == true ? Loc.T("allow_once") : Loc.T("allow");
+        _allow.Content = kind == "folder" ? Loc.T("choose_folder")
+            : req["can_remember"]?.GetValue<bool>() == true ? Loc.T("allow_once") : Loc.T("allow");
         _allow.Style = Ui.S("AccentButtonStyle");
         _allow.IsEnabled = false;
 

@@ -56,11 +56,15 @@ struct Client {
 }
 
 fn pair(s: &Server, origin: &str) -> Client {
+    pair_perms(s, origin, &["fs", "hw", "launch"])
+}
+
+fn pair_perms(s: &Server, origin: &str, perms: &[&str]) -> Client {
     let http = reqwest::blocking::Client::new();
     let r: Value = http
         .post(format!("http://{}/pair", s.addr))
         .header("Origin", origin)
-        .json(&json!({"perms": ["fs", "hw", "launch"]}))
+        .json(&json!({"perms": perms}))
         .send()
         .unwrap()
         .json()
@@ -289,21 +293,37 @@ fn hardware_info_is_plausible() {
 fn launch_rejects_dangerous_targets() {
     let s = start(&[]);
     let c = pair(&s, "https://a.example");
-    assert_eq!(c.err("app.launch", json!({"path": "notepad.exe"})), "bad_path"); // not absolute
-    assert_eq!(c.err("app.launch", json!({"path": "C:\\Windows\\System32\\nope.exe"})), "not_found");
-    for p in [
-        "C:\\Windows\\System32\\x.bat",
-        "C:\\x.cmd",
-        "C:\\x.ps1",
-        "C:\\x.vbs",
-        "C:\\x.lnk",
-        "C:\\x.js",
-    ] {
+
+    // A relative path is refused on every platform (on Unix a "C:\..." string
+    // is also just a relative name, so this covers it there too).
+    assert_eq!(c.err("app.launch", json!({"path": "notepad.exe"})), "bad_path");
+
+    // The remaining checks use absolute paths, whose syntax differs per OS; the
+    // behaviour under test (missing target, script/shortcut extensions, and
+    // NUL-in-argv) is the same everywhere.
+    #[cfg(windows)]
+    let (missing, scripts, real_exe) = (
+        "C:\\Windows\\System32\\nope.exe",
+        [
+            "C:\\Windows\\System32\\x.bat", "C:\\x.cmd", "C:\\x.ps1",
+            "C:\\x.vbs", "C:\\x.lnk", "C:\\x.js",
+        ],
+        "C:\\Windows\\System32\\cmd.exe",
+    );
+    #[cfg(not(windows))]
+    let (missing, scripts, real_exe) = (
+        "/usr/bin/__conduit_definitely_missing__",
+        ["/tmp/x.bat", "/tmp/x.cmd", "/tmp/x.ps1", "/tmp/x.vbs", "/tmp/x.lnk", "/tmp/x.js"],
+        "/bin/sh",
+    );
+
+    assert_eq!(c.err("app.launch", json!({"path": missing})), "not_found");
+    for p in scripts {
         assert_eq!(c.err("app.launch", json!({"path": p})), "denied", "{p} must be refused");
     }
-    // argv is never a shell string
+    // argv is never a shell string: a real executable, but a NUL in an argument.
     assert_eq!(
-        c.err("app.launch", json!({"path": "C:\\Windows\\System32\\cmd.exe", "args": ["a\u{0}b"]})),
+        c.err("app.launch", json!({"path": real_exe, "args": ["a\u{0}b"]})),
         "bad_params"
     );
 }
@@ -429,4 +449,117 @@ fn revoke_invalidates_the_token() {
         .send()
         .unwrap();
     assert_eq!(r.status(), 401);
+}
+
+// ------------------------------------------------------------------ folders
+
+#[test]
+fn folder_grant_is_scoped_and_forgettable() {
+    let fdir = std::env::temp_dir().join(format!("conduit_fld_{}_{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(&fdir).unwrap();
+    std::fs::write(fdir.join("existing.txt"), b"host file").unwrap();
+
+    let s = start(&["--pick-folder", fdir.to_str().unwrap()]);
+    let c = pair_perms(&s, "https://f.example", &["folder"]);
+
+    let pick = c.ok("folder.pick", json!({"name": "test"}));
+    let id = pick["id"].as_str().unwrap().to_string();
+
+    // The granted folder sees its own contents.
+    let l = c.ok("folder.list", json!({"id": id}));
+    assert!(l["entries"].as_array().unwrap().iter().any(|e| e["name"] == "existing.txt"));
+
+    // Write and read back inside the folder.
+    c.ok("folder.write", json!({"id": id, "path": "sub/new.txt", "data": "from site"}));
+    assert_eq!(c.ok("folder.read", json!({"id": id, "path": "sub/new.txt"}))["data"], json!("from site"));
+    assert_eq!(std::fs::read_to_string(fdir.join("sub/new.txt")).unwrap(), "from site");
+
+    // No escaping the folder.
+    assert_eq!(c.err("folder.read", json!({"id": id, "path": "../../etc/hosts"})), "bad_path");
+
+    // Forget removes access.
+    c.ok("folder.forget", json!({"id": id}));
+    assert_eq!(c.err("folder.list", json!({"id": id})), "not_found");
+
+    let _ = std::fs::remove_dir_all(&fdir);
+}
+
+#[test]
+fn folder_needs_permission() {
+    let s = start(&[]);
+    let c = pair_perms(&s, "https://g.example", &["fs"]);
+    assert_eq!(c.err("folder.pick", json!({})), "denied");
+}
+
+// ---------------------------------------------------------------- powershell
+
+#[test]
+fn shell_is_allowlisted_and_safe() {
+    let s = start(&[]);
+    let c = pair_perms(&s, "https://sh.example", &["shell"]);
+
+    // The catalog is non-empty and every entry has a risk score.
+    let cmds = c.ok("shell.commands", json!({}));
+    assert!(cmds["commands"].as_array().unwrap().iter().all(|e| e["risk"].is_number()));
+
+    // Nothing outside the list runs, and no metacharacters get through.
+    assert_eq!(c.err("shell.run", json!({"command": "Remove-Item", "args": ["x"]})), "denied");
+    assert_eq!(c.err("shell.run", json!({"command": "Invoke-Expression", "args": ["ls"]})), "denied");
+    assert_eq!(c.err("shell.run", json!({"command": "Get-Process", "args": ["a;b"]})), "denied");
+    assert_eq!(c.err("shell.run", json!({"command": "Get-Process", "args": ["$(whoami)"]})), "denied");
+
+    // The permission is required.
+    let c2 = pair_perms(&s, "https://noperm.example", &["fs"]);
+    assert_eq!(c2.err("shell.run", json!({"command": "Get-Date"})), "denied");
+
+    // On Windows PowerShell is present, so a low-risk cmdlet actually runs.
+    #[cfg(windows)]
+    {
+        let r = c.ok("shell.run", json!({"command": "Get-Date"}));
+        assert_eq!(r["command"], json!("Get-Date"));
+        assert!(r["output"].as_str().unwrap().len() > 0, "Get-Date should print something");
+    }
+}
+
+// -------------------------------------------------------------- ws watching
+
+fn ws_wait_event(
+    ws: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+    event: &str,
+) -> Value {
+    use tungstenite::Message;
+    if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_ref() {
+        s.set_read_timeout(Some(std::time::Duration::from_secs(6))).unwrap();
+    }
+    loop {
+        match ws.read().expect("ws read") {
+            Message::Text(t) => {
+                let v: Value = serde_json::from_str(&t).unwrap();
+                if v["event"] == json!(event) {
+                    return v;
+                }
+            }
+            _ => continue,
+        }
+    }
+}
+
+#[test]
+fn websocket_pushes_file_change_events() {
+    let s = start(&[]);
+    let c = pair(&s, "https://w.example");
+    let mut ws = ws_connect(&s.addr, "https://w.example");
+
+    assert_eq!(ws_call(&mut ws, "auth", json!({"token": c.token}))["ok"], json!(true));
+    let r = ws_call(&mut ws, "watch", json!({"scope": "sandbox"}));
+    assert_eq!(r["ok"], json!(true), "watch failed: {r}");
+
+    // A separate HTTP write into the sandbox should surface as an event.
+    c.ok("fs.write", json!({"path": "evt.txt", "data": "hi"}));
+    let ev = ws_wait_event(&mut ws, "fs.change");
+    assert!(
+        ev["changes"].as_array().unwrap().iter().any(|c| c["path"] == "evt.txt" && c["kind"] == "added"),
+        "expected an added event for evt.txt, got {ev}"
+    );
 }

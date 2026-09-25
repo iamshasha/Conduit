@@ -182,6 +182,17 @@ fn overview(bus: &Bus, d: &Value) -> ScrolledWindow {
     sw
 }
 
+/// Coarse "time left" for a grant's expiry label.
+fn fmt_dur(s: u64) -> String {
+    if s >= 86_400 {
+        format!("{}d", s / 86_400)
+    } else if s >= 3_600 {
+        format!("{}h", s / 3_600)
+    } else {
+        format!("{}m", (s / 60).max(1))
+    }
+}
+
 fn sites(bus: &Bus, d: &Value) -> ScrolledWindow {
     let (sw, col) = page(&t("nav_sites"));
     let grants = d["grants"].as_array().cloned().unwrap_or_default();
@@ -214,16 +225,83 @@ fn sites(bus: &Bus, d: &Value) -> ScrolledWindow {
         sub.set_wrap(true);
         card.append(&title);
         card.append(&sub);
+
+        // How long this grant lasts (omitted when it never expires).
+        let exp = if g["session"].as_bool() == Some(true) {
+            Some(t("session_only"))
+        } else {
+            g["expires_in"].as_u64().map(fmt_dur)
+        };
+        if let Some(txt) = exp {
+            let e = Label::new(Some(&format!("{} · {txt}", t("expires_label"))));
+            e.set_xalign(0.0);
+            e.add_css_class("dim-label");
+            card.append(&e);
+        }
+
+        // Host folders this site was granted, each with a Forget button.
+        if let Some(folders) = g["folders"].as_array().filter(|a| !a.is_empty()) {
+            let ft = Label::new(Some(&t("folders_title")));
+            ft.set_xalign(0.0);
+            ft.add_css_class("dim-label");
+            ft.set_margin_top(4);
+            card.append(&ft);
+            for f in folders {
+                let fid = f["id"].as_str().unwrap_or("").to_string();
+                let ro = if f["read_only"].as_bool() == Some(true) { format!(" ({})", t("read_only")) } else { String::new() };
+                let row = GBox::new(Orientation::Horizontal, 8);
+                let lbl = Label::new(Some(&format!("{}{ro} · {}", f["name"].as_str().unwrap_or(""), f["path"].as_str().unwrap_or(""))));
+                lbl.set_xalign(0.0);
+                lbl.set_hexpand(true);
+                lbl.set_wrap(true);
+                let forget = Button::with_label(&t("forget"));
+                let (b, o, id) = (bus.clone(), origin.clone(), fid);
+                forget.connect_clicked(move |_| b.cmd("forget_folder", json!({"origin": o, "id": id})));
+                row.append(&lbl);
+                row.append(&forget);
+                card.append(&row);
+            }
+        }
+
         let bar = GBox::new(Orientation::Horizontal, 8);
         bar.set_margin_top(4);
         let files_btn = Button::with_label(&t("open_sandbox"));
         let (b, o) = (bus.clone(), origin.clone());
         files_btn.connect_clicked(move |_| b.cmd("open_sandbox", json!({"origin": o})));
+        let export = Button::with_label(&t("export_files"));
+        let (b, o) = (bus.clone(), origin.clone());
+        export.connect_clicked(move |_| b.cmd("export_site", json!({"origin": o})));
+        let import = Button::with_label(&t("import_files"));
+        let (b, o) = (bus.clone(), origin.clone());
+        import.connect_clicked(move |btn| {
+            let chooser = gtk::FileChooserNative::new(
+                Some(&t("import_files")),
+                btn.root().and_downcast::<gtk::Window>().as_ref(),
+                gtk::FileChooserAction::Open,
+                Some(&t("import_files")),
+                Some(&t("cancel")),
+            );
+            let filter = gtk::FileFilter::new();
+            filter.add_pattern("*.zip");
+            chooser.add_filter(&filter);
+            let (ch, b, o) = (chooser.clone(), b.clone(), o.clone());
+            chooser.connect_response(move |_, resp| {
+                if resp == gtk::ResponseType::Accept {
+                    if let Some(p) = ch.file().and_then(|f| f.path()) {
+                        b.cmd("import_site", json!({"origin": o, "path": p.to_string_lossy()}));
+                    }
+                }
+                ch.destroy();
+            });
+            chooser.show();
+        });
         let revoke = Button::with_label(&t("revoke"));
         revoke.add_css_class("destructive-action");
         let (b, o) = (bus.clone(), origin.clone());
         revoke.connect_clicked(move |_| b.cmd("revoke", json!({"origin": o})));
         bar.append(&files_btn);
+        bar.append(&export);
+        bar.append(&import);
         bar.append(&revoke);
         card.append(&bar);
         col.append(&card);

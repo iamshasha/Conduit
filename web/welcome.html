@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Welcome to Conduit</title>
+<style>
+  :root{
+    --bg:#0d1018; --bg2:#141a2b;
+    --ink:#eef1fa; --muted:#aab3d4; --faint:#7f88a8;
+    --accent:#8b98f4; --accent-2:#6f7ce8;
+    --line:rgba(174,183,214,.14);
+    --card:rgba(255,255,255,.035);
+    --card-line:rgba(255,255,255,.07);
+    --radius:18px;
+    --maxw:920px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font:400 16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+    overflow-x:hidden;
+  }
+  /* The animated field sits behind everything and catches clicks for ripples. */
+  #field{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:0;touch-action:manipulation}
+  .wrap{position:relative;z-index:1;max-width:var(--maxw);margin:0 auto;padding:0 24px 96px}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* ---- hero ---- */
+  header{min-height:78vh;display:flex;flex-direction:column;justify-content:center;padding:64px 0 24px}
+  .mark{display:flex;align-items:center;gap:14px;margin-bottom:34px}
+  .mark svg{width:40px;height:40px;display:block}
+  .mark span{font-weight:600;letter-spacing:.2px;color:var(--muted)}
+  h1{
+    margin:0;
+    font-size:clamp(44px,8vw,88px);
+    line-height:1.02;
+    font-weight:680;
+    letter-spacing:-.02em;
+  }
+  h1 .thin{color:var(--muted);font-weight:400}
+  .lede{
+    margin:22px 0 0;
+    max-width:40ch;
+    font-size:clamp(17px,2.4vw,21px);
+    color:var(--muted);
+  }
+  .hint{margin-top:40px;color:var(--faint);font-size:13.5px;display:flex;align-items:center;gap:10px}
+  .hint .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 var(--accent);animation:pulse 2.6s ease-out infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(139,152,244,.5)}70%{box-shadow:0 0 0 12px rgba(139,152,244,0)}100%{box-shadow:0 0 0 0 rgba(139,152,244,0)}}
+
+  /* ---- sections ---- */
+  section{margin-top:64px}
+  .kicker{font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 18px}
+  h2{margin:0 0 10px;font-size:clamp(24px,3.4vw,32px);font-weight:620;letter-spacing:-.01em}
+
+  .steps{display:grid;gap:14px;counter-reset:step}
+  .step{
+    position:relative;display:grid;grid-template-columns:44px 1fr;gap:18px;align-items:start;
+    padding:20px 22px;border:1px solid var(--card-line);border-radius:var(--radius);
+    background:var(--card);
+    opacity:0;transform:translateY(14px);
+  }
+  .step.in{opacity:1;transform:none;transition:opacity .5s ease,transform .5s cubic-bezier(.2,.7,.2,1)}
+  .step .n{
+    counter-increment:step;width:44px;height:44px;border-radius:12px;
+    display:grid;place-items:center;font-variant-numeric:tabular-nums;font-weight:600;
+    color:var(--accent);border:1px solid var(--card-line);background:rgba(139,152,244,.08);
+  }
+  .step .n::before{content:counter(step)}
+  .step h3{margin:2px 0 4px;font-size:17px;font-weight:600}
+  .step p{margin:0;color:var(--muted);font-size:15px}
+  .step p code{
+    font-family:ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;font-size:13px;
+    background:rgba(255,255,255,.06);padding:1px 6px;border-radius:6px;color:var(--ink);
+  }
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .note{
+    padding:20px 22px;border:1px solid var(--card-line);border-radius:var(--radius);background:var(--card);
+  }
+  .note h3{margin:0 0 6px;font-size:16px;font-weight:600}
+  .note p{margin:0;color:var(--muted);font-size:14.5px}
+
+  .features{margin-top:64px;display:grid;gap:16px}
+  .feature{
+    padding:28px 26px;border-radius:var(--radius);border:1px solid var(--card-line);
+    background:linear-gradient(180deg,rgba(139,152,244,.09),rgba(139,152,244,.015));
+    position:relative;overflow:hidden;
+  }
+  /* A thin accent channel down the left edge, echoing the app mark. */
+  .feature::before{content:"";position:absolute;left:0;top:22px;bottom:22px;width:3px;border-radius:3px;background:linear-gradient(var(--accent),transparent)}
+  .feature h2{font-size:clamp(21px,3vw,26px);margin:0 0 8px}
+  .feature p{margin:0;color:var(--muted);max-width:62ch;font-size:15.5px}
+
+  footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--line);color:var(--faint);font-size:13.5px;display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center}
+
+  @media (max-width:640px){
+    .grid2{grid-template-columns:1fr}
+    header{min-height:70vh}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .step{opacity:1;transform:none}
+    .hint .dot{animation:none}
+  }
+</style>
+</head>
+<body>
+<canvas id="field" aria-hidden="true"></canvas>
+
+<div class="wrap">
+  <header>
+    <div class="mark">
+      <!-- The app mark: an outside origin, a consent gate, the machine. -->
+      <svg viewBox="0 0 512 512" role="img" aria-label="Conduit">
+        <rect x="8" y="8" width="496" height="496" rx="112" fill="#1b2236" stroke="rgba(255,255,255,.06)" stroke-width="2"/>
+        <g fill="none" stroke="#aeb7d6" stroke-width="26" stroke-linecap="round">
+          <path d="M118 256h92"/><path d="M302 256h92"/>
+        </g>
+        <circle cx="118" cy="256" r="42" fill="none" stroke="#aeb7d6" stroke-width="26"/>
+        <circle cx="394" cy="256" r="30" fill="#8b98f4"/>
+        <rect x="216" y="196" width="80" height="120" rx="24" fill="#8b98f4"/>
+        <rect x="240" y="238" width="32" height="36" rx="10" fill="#1b2236"/>
+      </svg>
+      <span>Conduit</span>
+    </div>
+
+    <h1>Reach past<br><span class="thin">the browser.</span></h1>
+    <p class="lede">Conduit is an app which allows websites to access users' folders, save onto the local device into their designated sandbox and read hardware information directly, while still giving the user maximum controls over the permissions.</p>
+
+    <div class="hint"><span class="dot"></span> Click anywhere. Every click sends a signal down the channel.</div>
+  </header>
+
+  <section>
+    <p class="kicker">How it works</p>
+    <h2>Four things to know</h2>
+    <div class="steps">
+      <div class="step"><div class="n"></div><div>
+        <h3>It lives quietly in the background</h3>
+        <p>After install, Conduit runs as a tray icon on Windows and Linux, or a menu-bar item on macOS. It listens only on your own machine, at <code>127.0.0.1</code>. Nothing is exposed to the internet.</p>
+      </div></div>
+      <div class="step"><div class="n"></div><div>
+        <h3>A site has to ask, and you answer</h3>
+        <p>The first time a page wants access, a prompt appears. <strong>Deny</strong> is selected by default, and <strong>Allow</strong> only becomes clickable after a moment, so a stray click or a held key can't approve anything. You pick exactly which permissions to grant.</p>
+      </div></div>
+      <div class="step"><div class="n"></div><div>
+        <h3>You stay in control from the dashboard</h3>
+        <p>Open Conduit any time to see every site you've approved, change or revoke its permissions, browse the files it has saved, and read a log of what it has done. One click takes any of it away.</p>
+      </div></div>
+      <div class="step"><div class="n"></div><div>
+        <h3>Connect a project</h3>
+        <p>Building in Scratch or TurboWarp? Load the Conduit extension and your project can save large files, read system stats, and more, each still gated by your consent. The extension URL is on the dashboard's Extension page.</p>
+      </div></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="kicker">What a site can ask for</p>
+    <h2>Permissions, one at a time</h2>
+    <div class="grid2">
+      <div class="note"><h3>Storage</h3><p>Keep real files in a per-site folder with far more room than cookies or local storage, wiped when you revoke the site.</p></div>
+      <div class="note"><h3>Launch apps</h3><p>Open an application by path. You approve each program the first time; Conduit can remember the ones you trust.</p></div>
+      <div class="note"><h3>Hardware &amp; stats</h3><p>Read CPU, memory, GPU, battery, and network figures, the same numbers your system monitor shows.</p></div>
+      <div class="note"><h3>Media, power &amp; clipboard</h3><p>Adjust volume, control playback, read the clipboard, or sleep the machine, each behind its own prompt.</p></div>
+    </div>
+  </section>
+
+  <section class="features">
+    <div class="feature">
+      <h2>Safe and Fast</h2>
+      <p>It runs locally on your device unexposed to the internet, so nothing on the internet can access it. It's also designed to be extremely efficient and small. It uses very little memory when idle and sits at 0% CPU usage.</p>
+    </div>
+    <div class="feature">
+      <h2>Your device, you decide.</h2>
+      <p>You can control how much permission you give to each website easily within our dashboard, and even revoke all permissions instantly. When the website asks for permission, you can always choose to allow or reject it.</p>
+    </div>
+    <div class="feature">
+      <h2>Designs and Choices</h2>
+      <p>We chose to use the native UI (WinUI 3 for Windows, GTK for Linux and Swift for Mac) instead of wrapping websites because we hope the app can provide maximum efficiency and the smallest package size on all platforms.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>Conduit runs on Windows, macOS, and Linux.</span>
+    <a href="/test">Open the test page</a>
+    <a href="/health">Server status</a>
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const canvas = document.getElementById("field");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let W = 0, H = 0, DPR = 1;
+
+  // The aurora is soft, so it's drawn into a small offscreen buffer and scaled
+  // up (a handful of radial fills at ~700px) cost almost nothing, and blurry
+  // gradients upscale without any visible loss. Ripples draw crisp on top.
+  const buf = document.createElement("canvas");
+  const bctx = buf.getContext("2d", { alpha: false });
+  let bw = 0, bh = 0;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2); // cap DPR for fill-rate
+    W = canvas.clientWidth; H = canvas.clientHeight;
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const scale = Math.min(1, 700 / Math.max(W, H));
+    bw = Math.max(1, Math.round(W * scale)); bh = Math.max(1, Math.round(H * scale));
+    buf.width = bw; buf.height = bh;
+    ctx.imageSmoothingEnabled = true;
+  }
+  addEventListener("resize", resize, { passive: true });
+
+  // Slow-drifting light sources: an aurora over near-black. Kept to a handful
+  // so the whole thing stays cheap even on a laptop iGPU.
+  const blobs = [
+    { hue: 231, x: .28, y: .30, r: .55, ax: .06, ay: .05, px: 0.0, py: 1.2, sp: .00013 },
+    { hue: 254, x: .74, y: .38, r: .48, ax: .05, ay: .06, px: 2.1, py: 0.4, sp: .00017 },
+    { hue: 210, x: .55, y: .78, r: .50, ax: .07, ay: .04, px: 4.0, py: 2.3, sp: .00011 },
+  ];
+
+  // Click ripples: rings expanding from the pointer, fading as they grow.
+  const ripples = [];
+  const MAX_RIPPLES = 24;
+  function addRipple(x, y) {
+    if (ripples.length > MAX_RIPPLES) ripples.splice(0, ripples.length - MAX_RIPPLES);
+    ripples.push({ x, y, t: performance.now() });
+  }
+  // pointerdown (not click) so it fires under the text too, and once per touch.
+  addEventListener("pointerdown", (e) => addRipple(e.clientX, e.clientY), { passive: true });
+
+  function drawBackground(t) {
+    // Base wash into the small buffer.
+    const g = bctx.createLinearGradient(0, 0, 0, bh);
+    g.addColorStop(0, "#0d1018"); g.addColorStop(1, "#0a0c14");
+    bctx.fillStyle = g; bctx.fillRect(0, 0, bw, bh);
+
+    bctx.globalCompositeOperation = "lighter";
+    for (const b of blobs) {
+      const cx = (b.x + Math.sin(t * b.sp + b.px) * b.ax) * bw;
+      const cy = (b.y + Math.cos(t * b.sp + b.py) * b.ay) * bh;
+      const rad = b.r * Math.max(bw, bh);
+      const rg = bctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+      rg.addColorStop(0, `hsla(${b.hue},70%,60%,0.16)`);
+      rg.addColorStop(0.5, `hsla(${b.hue},70%,55%,0.05)`);
+      rg.addColorStop(1, "hsla(0,0%,0%,0)");
+      bctx.fillStyle = rg;
+      bctx.fillRect(0, 0, bw, bh);
+    }
+    bctx.globalCompositeOperation = "source-over";
+
+    // Blit the buffer up to the full-resolution canvas (opaque, so it also
+    // clears last frame's ripples).
+    ctx.drawImage(buf, 0, 0, bw, bh, 0, 0, W, H);
+  }
+
+  function drawRipples(now) {
+    const LIFE = 1400;
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      const age = (now - r.t) / LIFE;
+      if (age >= 1) { ripples.splice(i, 1); continue; }
+      const ease = 1 - Math.pow(1 - age, 3);
+      const radius = ease * 260;
+      const alpha = (1 - age) * 0.5;
+      // Two rings, slightly offset, for a bit of depth.
+      for (let k = 0; k < 2; k++) {
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, Math.max(0, radius - k * 16), 0, Math.PI * 2);
+        ctx.strokeStyle = `hsla(232,85%,72%,${alpha * (k ? 0.4 : 1)})`;
+        ctx.lineWidth = 2 - k;
+        ctx.stroke();
+      }
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  let raf = 0, running = true;
+  function frame(now) {
+    drawBackground(now);
+    if (!reduce) drawRipples(now);
+    raf = running ? requestAnimationFrame(frame) : 0;
+  }
+
+  // Pause when the tab is not visible: no work while nobody is looking.
+  document.addEventListener("visibilitychange", () => {
+    running = !document.hidden;
+    if (running && !raf) raf = requestAnimationFrame(frame);
+  });
+
+  resize();
+  if (reduce) { drawBackground(0); } else { raf = requestAnimationFrame(frame); }
+
+  // Reveal the steps as they scroll in.
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+  }, { threshold: 0.2 });
+  document.querySelectorAll(".step").forEach((el, i) => { el.style.transitionDelay = (i * 70) + "ms"; io.observe(el); });
+})();
+</script>
+</body>
+</html>

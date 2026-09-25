@@ -272,8 +272,14 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
             let tx = link.sender();
             link.rt.spawn_blocking(move || {
                 let mut s = rpc::sys_stats(&st);
-                if let Ok((level, muted)) = system::volume_get() {
-                    s["volume"] = json!({"level": level, "muted": muted});
+                // volume_get / now_playing spawn helper processes on Linux and
+                // macOS; cache them briefly so the fast CPU tick stays cheap.
+                let vol = st.volume_cached(|| match system::volume_get() {
+                    Ok((level, muted)) => json!({"level": level, "muted": muted}),
+                    Err(_) => json!(null),
+                });
+                if !vol.is_null() {
+                    s["volume"] = vol;
                 }
                 if st.settings().detailed {
                     // Always a number (0 when a sample is unavailable) so the
@@ -281,11 +287,11 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                     let u = system::gpu_usage(180).unwrap_or(0.0);
                     s["gpu_usage"] = json!((u * 10.0).round() / 10.0);
                 }
-                s["media"] = match system::now_playing() {
+                s["media"] = st.media_cached(|| match system::now_playing() {
                     Ok(Some(n)) => json!({"present": true, "title": n.title, "artist": n.artist,
                                           "album": n.album, "status": n.status, "app": n.app}),
                     _ => json!({"present": false}),
-                };
+                });
                 if let Some(tx) = tx {
                     let _ = tx.send(json!({"type": "stats", "data": s}).to_string());
                 }
@@ -294,6 +300,7 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         "volume_set" => {
             let level = msg["level"].as_f64().map(|l| l.clamp(0.0, 100.0).round() as u32);
             let muted = msg["muted"].as_bool();
+            state.invalidate_volume();
             let tx = link.sender();
             link.rt.spawn_blocking(move || {
                 let r = system::volume_set(level, muted);
@@ -305,6 +312,7 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         "media_control" => {
             let action = msg["action"].as_str().unwrap_or("").to_string();
             if system::MEDIA_ACTIONS.contains(&action.as_str()) {
+                state.invalidate_media();
                 let tx = link.sender();
                 link.rt.spawn_blocking(move || {
                     if let (Some(tx), Err(e)) = (tx, system::media_control(&action)) {
@@ -313,14 +321,20 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                 });
             }
         }
-        "consent" => state.answer(
-            msg["id"].as_u64().unwrap_or(0),
-            ConsentAnswer {
-                allow: msg["allow"].as_bool().unwrap_or(false),
-                perms: strings(&msg["perms"]),
-                remember: msg["remember"].as_bool().unwrap_or(false),
-            },
-        ),
+        "consent" => {
+            let (expires, session) = crate::state::scope_to_expiry(msg["scope"].as_str().unwrap_or(""));
+            state.answer(
+                msg["id"].as_u64().unwrap_or(0),
+                ConsentAnswer {
+                    allow: msg["allow"].as_bool().unwrap_or(false),
+                    perms: strings(&msg["perms"]),
+                    remember: msg["remember"].as_bool().unwrap_or(false),
+                    expires,
+                    session,
+                    path: msg["path"].as_str().unwrap_or("").to_string(),
+                },
+            )
+        }
         "settings" => {
             if let Ok(mut s) = serde_json::from_value::<Settings>(msg["settings"].clone()) {
                 // These change only through their own commands, never the form.
@@ -482,6 +496,55 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                 }
             });
         }
+        "export_site" => {
+            let dir = state.sites_root().join(crate::sandbox::origin_key(origin));
+            let downloads = dirs::download_dir().unwrap_or_else(|| state.cfg.data_dir.clone());
+            let stamp = crate::state::now_secs();
+            let name = format!("conduit-{}-{}.zip", crate::sandbox::origin_key(origin), stamp);
+            let out = downloads.join(name);
+            let (st, tx, origin_s) = (state.clone(), link.sender(), origin.to_string());
+            link.rt.spawn_blocking(move || {
+                let _ = &st;
+                let reply = match crate::archive::export(&dir, &out) {
+                    Ok(_) => {
+                        let _ = system::reveal(&out, true);
+                        json!({"type": "toast", "data": "toast_exported"})
+                    }
+                    Err(e) => json!({"type": "toast", "data": e}),
+                };
+                let _ = origin_s;
+                if let Some(tx) = tx {
+                    let _ = tx.send(reply.to_string());
+                }
+            });
+        }
+        "import_site" => {
+            let zip = PathBuf::from(msg["path"].as_str().unwrap_or(""));
+            if !zip.is_file() {
+                return toast(Err("pick a .zip file".into()));
+            }
+            let dir = state.sites_root().join(crate::sandbox::origin_key(origin));
+            let _ = std::fs::create_dir_all(&dir);
+            let (used, files) = crate::sandbox::usage(&dir);
+            let lim = crate::archive::ImportLimits {
+                max_file: state.cfg.max_file,
+                quota: state.quota_for(origin),
+                max_files: state.cfg.max_files,
+                used,
+                files,
+            };
+            let (st, tx) = (state.clone(), link.sender());
+            link.rt.spawn_blocking(move || {
+                let reply = match crate::archive::import(&zip, &dir, lim) {
+                    Ok(_) => json!({"type": "toast", "data": "toast_imported"}),
+                    Err(e) => json!({"type": "toast", "data": e}),
+                };
+                if let Some(tx) = tx {
+                    let _ = tx.send(reply.to_string());
+                    let _ = tx.send(json!({"type": "snapshot", "data": snapshot(&st)}).to_string());
+                }
+            });
+        }
         "revoke" => state.revoke(origin),
         "set_perms" => {
             state.set_perms(origin, strings(&msg["perms"]));
@@ -489,6 +552,10 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         }
         "forget_app" => {
             state.remember_launch(origin, msg["path"].as_str().unwrap_or(""), false);
+            refresh();
+        }
+        "forget_folder" => {
+            state.forget_folder(origin, msg["id"].as_str().unwrap_or(""));
             refresh();
         }
         "open_sandbox" => {
@@ -823,7 +890,7 @@ fn fallback_consent(state: Arc<AppState>, req: ConsentReq) {
             k => format!("requests: {k} {}", req.detail),
         };
         let yes = message_box(&format!("{}\n{what}\n\nAllow?", req.origin), true);
-        state.answer(req.id, ConsentAnswer { allow: yes, perms: if yes { req.perms } else { vec![] }, remember: false });
+        state.answer(req.id, ConsentAnswer { allow: yes, perms: if yes { req.perms } else { vec![] }, ..Default::default() });
     });
 }
 

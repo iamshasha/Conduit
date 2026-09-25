@@ -669,7 +669,10 @@ sealed class MainWindow : Window
             who.Children.Add(name);
             var permNames = granted.Count == 0 ? Loc.T("none")
                 : string.Join(", ", all.Where(granted.Contains).Select(p => Loc.T("perm_" + p)));
-            who.Children.Add(Ui.Secondary($"{permNames}\n{Loc.T("storage_used", ("size", Ui.Bytes(used)), ("files", files))}"));
+            string? expTxt = g["session"]?.GetValue<bool>() == true ? Loc.T("session_only") : null;
+            if (expTxt is null && g["expires_in"] is JsonValue ev && ev.TryGetValue<long>(out var esecs)) expTxt = FmtDur(esecs);
+            var expLine = expTxt is null ? "" : $"\n{Loc.T("expires_label")} · {expTxt}";
+            who.Children.Add(Ui.Secondary($"{permNames}\n{Loc.T("storage_used", ("size", Ui.Bytes(used)), ("files", files))}{expLine}"));
 
             var quick = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
             var filesBtn = Ui.IconButton("", Loc.T("files"),
@@ -678,6 +681,14 @@ sealed class MainWindow : Window
             quick.Children.Add(filesBtn);
             quick.Children.Add(Ui.IconButton("", Loc.T("open_sandbox"),
                 (_, _) => Core.Cmd("open_sandbox", new JsonObject { ["origin"] = origin })));
+            quick.Children.Add(Ui.IconButton("", Loc.T("export_files"),
+                (_, _) => Core.Cmd("export_site", new JsonObject { ["origin"] = origin })));
+            quick.Children.Add(Ui.IconButton("", Loc.T("import_files"), async (_, _) =>
+            {
+                var zpath = await PickZip();
+                if (!string.IsNullOrEmpty(zpath))
+                    Core.Cmd("import_site", new JsonObject { ["origin"] = origin, ["path"] = zpath });
+            }));
             quick.Children.Add(Ui.IconButton("", Loc.T("revoke"), async (_, _) =>
             {
                 if (await Confirm(Loc.T("revoke"), Loc.T("revoke_confirm", ("origin", Ui.Host(origin))), Loc.T("revoke")))
@@ -756,6 +767,34 @@ sealed class MainWindow : Window
                     body.Children.Add(row);
                 }
             }
+            var folders = g["folders"] as JsonArray ?? [];
+            if (folders.Count > 0)
+            {
+                body.Children.Add(Ui.Text(Loc.T("folders_title"), "BodyStrongTextBlockStyle"));
+                foreach (var f in folders)
+                {
+                    var fid = f!["id"]?.GetValue<string>() ?? "";
+                    var fname = f["name"]?.GetValue<string>() ?? "";
+                    var fpath = f["path"]?.GetValue<string>() ?? "";
+                    var ro = f["read_only"]?.GetValue<bool>() == true ? $" ({Loc.T("read_only")})" : "";
+                    var row = new Grid { ColumnSpacing = 8 };
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    var info = new StackPanel();
+                    info.Children.Add(new TextBlock { Text = fname + ro, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+                    info.Children.Add(new TextBlock
+                    {
+                        Text = fpath, FontFamily = new FontFamily("Cascadia Mono, Consolas"),
+                        TextTrimming = TextTrimming.CharacterEllipsis, IsTextSelectionEnabled = true,
+                    });
+                    row.Children.Add(info);
+                    var forgetF = new Button { Content = Loc.T("forget"), VerticalAlignment = VerticalAlignment.Center };
+                    forgetF.Click += (_, _) => Core.Cmd("forget_folder", new JsonObject { ["origin"] = origin, ["id"] = fid });
+                    Grid.SetColumn(forgetF, 1);
+                    row.Children.Add(forgetF);
+                    body.Children.Add(row);
+                }
+            }
             var clear = new Button { Content = Loc.T("clear_data"), IsEnabled = files > 0 };
             clear.Click += async (_, _) =>
             {
@@ -813,10 +852,17 @@ sealed class MainWindow : Window
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        var top = new Grid();
-        top.Children.Add(Ui.Text(Loc.T("nav_activity"), "TitleTextBlockStyle"));
+        // Two columns so the Clear button sits beside the title, never over it.
+        var top = new Grid { ColumnSpacing = 12 };
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var actTitle = Ui.Text(Loc.T("nav_activity"), "TitleTextBlockStyle");
+        actTitle.VerticalAlignment = VerticalAlignment.Center;
+        top.Children.Add(actTitle);
         var clear = Ui.IconButton("", Loc.T("clear"), (_, _) => Core.Cmd("clear_activity"));
         clear.HorizontalAlignment = HorizontalAlignment.Right;
+        clear.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(clear, 1);
         top.Children.Add(clear);
         grid.Children.Add(top);
 
@@ -1160,6 +1206,23 @@ sealed class MainWindow : Window
             _updateInfo.Severity = InfoBarSeverity.Informational;
             _updateInfo.Title = Loc.T("up_to_date", ("version", d["current"]?.GetValue<string>() ?? ""));
         }
+    }
+
+    /// Coarse "time left" for a grant's expiry label.
+    static string FmtDur(long s) => s >= 86_400 ? $"{s / 86_400}d" : s >= 3_600 ? $"{s / 3_600}h" : $"{Math.Max(1, s / 60)}m";
+
+    /// Pick a .zip to import into a site's sandbox; returns its path or "".
+    async Task<string> PickZip()
+    {
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FileOpenPicker();
+            picker.FileTypeFilter.Add(".zip");
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            var file = await picker.PickSingleFileAsync();
+            return file?.Path ?? "";
+        }
+        catch (Exception e) { Toast(e.Message); return ""; }
     }
 
     async Task ImportFile(string kind)
