@@ -32,6 +32,19 @@ jobs:
       - name: Test
         run: cargo test --release
 
+  # Compile-check the GTK (Linux) GUI so it can't drift from the core protocol.
+  linux-gui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Desktop deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev
+      - name: Build GTK GUI
+        run: cd gui-gtk && cargo build --release
+
   # Compile-check the macOS Swift GUI so it can't drift from the core protocol.
   macos-gui:
     runs-on: macos-latest
