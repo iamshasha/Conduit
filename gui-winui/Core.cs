@@ -41,8 +41,11 @@ static class Core
     {
         lock (Gate)
         {
+            // A pipe that closed during teardown throws ObjectDisposedException,
+            // not just IOException; a Window.Closed handler firing Core.Cmd after
+            // the core exits must never take the process down. ReadLoop reports it.
             try { _writer?.WriteLine(msg.ToJsonString()); }
-            catch (IOException) { /* core went away; ReadLoop reports it */ }
+            catch (Exception e) when (e is IOException or ObjectDisposedException) { }
         }
     }
 
@@ -378,5 +381,6 @@ static class Ui
         ["fs"] = "\uE8B7", ["hw"] = "\uE950", ["launch"] = "\uE8A7", ["system"] = "\uE770",
         ["process"] = "\uE9F5", ["power"] = "\uE7E8", ["clipboard"] = "\uE77F", ["notify"] = "\uEA8F",
         ["hostfs"] = "\uEC25", ["crypto"] = "\uE72E", ["ai"] = "\uE99A",
+        ["folder"] = "\uE838", ["shell"] = "\uE756",
     };
 }

@@ -712,7 +712,7 @@ sealed class MainWindow : Window
             var boxes = new List<CheckBox>();
             var repeater = new ItemsRepeater
             {
-                Layout = new UniformGridLayout { MinItemWidth = 210, MinColumnSpacing = 8, MinRowSpacing = 0, ItemsStretch = UniformGridLayoutItemsStretch.Fill },
+                Layout = new UniformGridLayout { MinItemWidth = 210, MinColumnSpacing = 8, MinRowSpacing = 6, ItemsStretch = UniformGridLayoutItemsStretch.Fill },
                 Margin = new Thickness(0, 4, 0, 0),
             };
             var items = new List<UIElement>();
