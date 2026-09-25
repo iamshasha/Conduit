@@ -271,3 +271,10 @@ pub fn autostart_enabled() -> bool {
 
 /// No detached-console dance on Linux; stdio is already connected.
 pub fn attach_parent_console() {}
+
+/// App metadata. On Linux only the filesystem basics are available — desktop
+/// icons live in themed icon sets keyed off .desktop files, not the binary — so
+/// no icon is returned.
+pub fn app_meta(path: &std::path::Path) -> super::AppMeta {
+    super::basic_meta(path)
+}

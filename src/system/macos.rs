@@ -200,3 +200,9 @@ pub fn autostart_enabled() -> bool {
 }
 
 pub fn attach_parent_console() {}
+
+/// App metadata. Filesystem basics only for now; extracting an .icns from an
+/// .app bundle is not yet implemented, so no icon is returned.
+pub fn app_meta(path: &std::path::Path) -> super::AppMeta {
+    super::basic_meta(path)
+}

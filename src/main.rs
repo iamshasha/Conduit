@@ -27,6 +27,7 @@ mod crypto;
 mod gpu;
 mod gui;
 mod hostfs;
+mod net;
 mod rpc;
 mod sandbox;
 mod shell;
@@ -400,13 +401,14 @@ async fn health() -> impl IntoResponse {
             "perms": state::PERMS,
             "methods": ["ping","perms","revoke","hw.info","sys.stats","sys.battery",
                         "fs.quota","fs.write","fs.read","fs.list","fs.stat","fs.mkdir",
-                        "fs.delete","fs.copy","fs.move","fs.reveal","app.list","app.launch",
+                        "fs.delete","fs.copy","fs.move","fs.reveal","app.list","app.info","app.launch",
                         "sys.media","sys.volume","sys.volume.set","sys.media.info","sys.media.control","sys.open_url","sys.processes","sys.kill","sys.power",
                         "sys.elevation","sys.elevate","sys.gpu","clipboard.write","clipboard.read","notify",
                         "host.roots","host.list","host.stat","host.read","host.write","host.delete","host.mkdir","host.move",
                         "folder.pick","folder.granted","folder.list","folder.read","folder.write","folder.stat","folder.mkdir","folder.delete","folder.move","folder.forget",
                         "watch","unwatch",
-                        "shell.commands","shell.run",
+                        "shell.commands","shell.assess","shell.run",
+                        "net.fetch",
                         "crypto.encrypt","crypto.decrypt","ai.status","ai.generate"],
         })),
     )

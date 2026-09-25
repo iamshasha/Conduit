@@ -10,8 +10,10 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
-pub const PERMS: [&str; 13] =
-    ["fs", "hw", "launch", "system", "process", "power", "clipboard", "notify", "hostfs", "crypto", "ai", "folder", "shell"];
+pub const PERMS: [&str; 14] = [
+    "fs", "hw", "launch", "system", "process", "power", "clipboard", "notify", "hostfs", "crypto", "ai", "folder",
+    "shell", "net",
+];
 
 /// Consent kinds that `--yes` refuses to auto-approve: too destructive to
 /// click through by accident, even in a test rig.

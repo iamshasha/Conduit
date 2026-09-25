@@ -522,6 +522,91 @@ fn shell_is_allowlisted_and_safe() {
     }
 }
 
+#[test]
+fn shell_assess_scores_arguments() {
+    let s = start(&[]);
+    let c = pair_perms(&s, "https://sh.example", &["shell"]);
+
+    // A bare low-risk cmdlet does not need consent…
+    let plain = c.ok("shell.assess", json!({"command": "Get-Service"}));
+    assert_eq!(plain["needs_consent"], json!(false));
+    let base = plain["risk"].as_u64().unwrap();
+
+    // …but a wildcard sweep raises the score past the threshold, with a reason.
+    let wild = c.ok("shell.assess", json!({"command": "Get-Service", "args": ["-Name", "win*"]}));
+    assert!(wild["risk"].as_u64().unwrap() > base);
+    assert_eq!(wild["needs_consent"], json!(true));
+    assert!(wild["reasons"].as_array().unwrap().iter().any(|r| r.as_str().unwrap().contains("wildcard")));
+
+    // A remote query is high risk.
+    let remote = c.ok("shell.assess", json!({"command": "Get-Process", "args": ["-ComputerName", "server01"]}));
+    assert!(remote["risk"].as_u64().unwrap() >= 50);
+
+    // Assessing does not execute, and still rejects anything unlisted.
+    assert_eq!(c.err("shell.assess", json!({"command": "Remove-Item"})), "denied");
+}
+
+// ------------------------------------------------------------------- app info
+
+#[test]
+fn app_info_returns_metadata() {
+    let s = start(&[]);
+    let c = pair_perms(&s, "https://app.example", &["launch"]);
+    let exe = env!("CARGO_BIN_EXE_conduit");
+
+    // Full metadata for a real executable: name, size, and no crash on icon.
+    let info = c.ok("app.info", json!({"path": exe}));
+    assert!(info["size"].as_u64().unwrap() > 0, "size should be known");
+    assert!(!info["name"].as_str().unwrap().is_empty(), "name should be set");
+    assert_eq!(info["path"].as_str().unwrap().is_empty(), false);
+
+    // Relative paths and missing files are refused.
+    assert_eq!(c.err("app.info", json!({"path": "conduit"})), "bad_path");
+    assert_eq!(c.err("app.info", json!({"path": "/no/such/file/xyz"})), "not_found");
+
+    // The permission is required.
+    let c2 = pair_perms(&s, "https://noperm.example", &["fs"]);
+    assert_eq!(c2.err("app.info", json!({"path": exe})), "denied");
+
+    // app.list carries both the legacy strings and the richer app objects.
+    let list = c.ok("app.list", json!({}));
+    assert!(list["allowed"].is_array());
+    assert!(list["apps"].is_array());
+}
+
+// ---------------------------------------------------------------- net proxy
+
+#[test]
+fn net_fetch_blocks_ssrf_and_needs_perm() {
+    let s = start(&[]);
+    let c = pair_perms(&s, "https://net.example", &["net"]);
+
+    // Loopback, private ranges, the metadata IP and localhost are all refused.
+    for url in [
+        "http://127.0.0.1/",
+        "http://localhost:9/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.1/",
+        "http://192.168.1.1/",
+    ] {
+        // Space requests past the proxy's per-origin rate limit so each one
+        // reaches the SSRF check rather than tripping the throttle.
+        std::thread::sleep(std::time::Duration::from_millis(70));
+        let code = c.err("net.fetch", json!({"url": url}));
+        assert!(code == "bad_params" || code == "denied", "{url} should be blocked, got {code}");
+    }
+
+    // A bad method is rejected before the throttle even applies.
+    assert_eq!(c.err("net.fetch", json!({"url": "https://example.com/", "method": "TRACE"})), "bad_params");
+    // A non-http scheme is refused (space past the rate limit first).
+    std::thread::sleep(std::time::Duration::from_millis(70));
+    assert_eq!(c.err("net.fetch", json!({"url": "ftp://example.com/"})), "bad_params");
+
+    // The permission is required.
+    let c2 = pair_perms(&s, "https://noperm.example", &["fs"]);
+    assert_eq!(c2.err("net.fetch", json!({"url": "https://example.com/"})), "denied");
+}
+
 // -------------------------------------------------------------- ws watching
 
 fn ws_wait_event(

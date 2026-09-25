@@ -525,6 +525,7 @@ dependencies = [
  "base64 0.22.1",
  "dirs 5.0.1",
  "notify-rust",
+ "png",
  "rand 0.8.8",
  "reqwest",
  "serde",

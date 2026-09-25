@@ -71,6 +71,8 @@ on every request.
 | Per-file cap, byte quota, file-count cap, 48 MB body cap | disk-filling |
 | Token bucket (30/s, burst 60), max 4 sockets per origin | request floods |
 | `app.launch` is argv-only — never a shell — refuses `.bat .cmd .ps1 .vbs .js .lnk .scr .msi`, requires an absolute existing `.exe`, and asks for consent per call unless pre-allowed | RCE, argument injection (CVE-2024-24576 class) |
+| `shell.run` runs only curated **read-only** cmdlets, args are metacharacter-free, no pipelines/`;`/`&`/`Invoke-Expression`; an argument-aware classifier escalates wildcard/remote/off-box calls to consent | shell injection, remote pivoting, silent enumeration |
+| `net.fetch` refuses any destination that resolves to a loopback/private/link-local/unique-local/CGNAT address (incl. the cloud metadata IP), re-validates every redirect hop, and caps bodies | SSRF into the local network, redirect-based bypass |
 | `hw.info` returns no serials, hostname or usernames | fingerprinting/identity leakage |
 
 Flags: `--port`, `--data-dir`, `--allow-origin O` (skip the pairing prompt for one
@@ -121,7 +123,8 @@ Replies are `{"id":1,"ok":true,"result":{…}}` or
 | `fs.quota` | `fs` | – |
 | `fs.copy`, `fs.move` | `fs` | `from`, `to`, `overwrite` |
 | `fs.reveal` | `fs` | `path` (opens Explorer, throttled) |
-| `app.list` | `launch` | – |
+| `app.list` | `launch` | – (returns `allowed` paths **and** `apps` with a display name) |
+| `app.info` | `launch` | `path` (absolute), `icon` (default true) → name, version, publisher, size and the app **icon as a base64 PNG** (Windows) |
 | `app.launch` | `launch` | `path` (absolute exe), `args` (array), `cwd` (inside the sandbox); asks per call unless remembered |
 | `sys.stats` | `hw` | – (cpu, per-core, mem, net rate, uptime, battery) |
 | `sys.battery` | `hw` | – |
@@ -135,14 +138,19 @@ Replies are `{"id":1,"ok":true,"result":{…}}` or
 | `clipboard.write` | `clipboard` | `text` |
 | `clipboard.read` | `clipboard` | – (asks every time) |
 | `notify` | `notify` | `title`, `body` (tagged with the site name, throttled) |
+| `shell.commands` | `shell` | – (the allow-listed cmdlets, each with a base risk score) |
+| `shell.assess` | `shell` | `command`, `args` — dry-run the risk classifier (score + reasons) without running anything |
+| `shell.run` | `shell` | `command`, `args` — runs an allow-listed, read-only PowerShell cmdlet; argument-aware risk (wildcards, remote `-ComputerName`, off-box targets escalate it); asks per call at or above the consent threshold |
+| `net.fetch` | `net` | `url`, `method`, `headers`, `body`/`bodyEncoding`, `responseType` — server-side HTTP so a page can reach APIs that block CORS; only public destinations, redirects re-validated, bodies capped |
 
 Error codes: `bad_host`, `bad_origin`, `unauthorized`, `denied`, `rate_limited`,
 `bad_params`, `bad_path`, `not_found`, `not_utf8`, `too_large`, `exists`, `quota`,
 `io`, `no_method`, `bad_json`, `too_many_connections`.
 
 Permissions: `fs`, `hw`, `launch`, `system`, `process`, `power`, `clipboard`,
-`notify`. A grant only holds the permissions the user ticked at pairing;
-`sys.kill`, `sys.power`, `clipboard.read`, `sys.elevate` and un-remembered
+`notify`, `hostfs`, `crypto`, `ai`, `folder`, `shell`, `net`. A grant only holds
+the permissions the user ticked at pairing; `sys.kill`, `sys.power`,
+`clipboard.read`, `sys.elevate`, high-risk `shell.run` and un-remembered
 `app.launch` also ask again per call.
 
 ## TurboWarp extension

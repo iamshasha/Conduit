@@ -417,3 +417,182 @@ pub fn attach_parent_console() {
         AttachConsole(ATTACH_PARENT_PROCESS);
     }
 }
+
+// -------------------------------------------------------------- app metadata
+
+/// Full metadata for an executable: its version-resource strings plus its icon
+/// rendered to PNG. Every step degrades gracefully — a file with no version
+/// block or no icon still returns the filesystem basics.
+pub fn app_meta(path: &std::path::Path) -> super::AppMeta {
+    let mut m = super::basic_meta(path);
+    let wpath = wide(&m.path);
+    if let Some(v) = read_version_strings(&wpath) {
+        // Prefer a human product/description name over the bare file stem.
+        if let Some(n) = v.product.or(v.description.clone()) {
+            if !n.trim().is_empty() {
+                m.name = n;
+            }
+        }
+        m.version = v.version.filter(|s| !s.trim().is_empty());
+        m.publisher = v.company.filter(|s| !s.trim().is_empty());
+        m.description = v.description.filter(|s| !s.trim().is_empty());
+    }
+    m.icon_png = extract_icon_png(&wpath);
+    m
+}
+
+#[derive(Default)]
+struct VersionStrings {
+    product: Option<String>,
+    company: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+}
+
+/// Read the file's version resource. Queries the file's own language/codepage
+/// first, then falls back to US-English so localized builds still resolve.
+fn read_version_strings(wpath: &[u16]) -> Option<VersionStrings> {
+    use windows_sys::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+    unsafe {
+        let mut handle = 0u32;
+        let size = GetFileVersionInfoSizeW(wpath.as_ptr(), &mut handle);
+        if size == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; size as usize];
+        if GetFileVersionInfoW(wpath.as_ptr(), 0, size, buf.as_mut_ptr() as *mut _) == 0 {
+            return None;
+        }
+        let block = buf.as_ptr() as *const core::ffi::c_void;
+
+        // Figure out which language/codepage table this file actually carries.
+        let mut lang_cp = String::from("040904B0");
+        let trans = wide("\\VarFileInfo\\Translation");
+        let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut len = 0u32;
+        if VerQueryValueW(block, trans.as_ptr(), &mut ptr, &mut len) != 0 && len >= 4 && !ptr.is_null() {
+            let words = std::slice::from_raw_parts(ptr as *const u16, 2);
+            lang_cp = format!("{:04X}{:04X}", words[0], words[1]);
+        }
+
+        let query = |field: &str| -> Option<String> {
+            for lc in [lang_cp.as_str(), "040904B0", "040904E4", "000004B0"] {
+                let sub = wide(&format!("\\StringFileInfo\\{lc}\\{field}"));
+                let mut p: *mut core::ffi::c_void = std::ptr::null_mut();
+                let mut l = 0u32;
+                if VerQueryValueW(block, sub.as_ptr(), &mut p, &mut l) != 0 && l > 0 && !p.is_null() {
+                    // `l` counts characters including the trailing NUL.
+                    let chars = std::slice::from_raw_parts(p as *const u16, l as usize);
+                    let end = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
+                    let s = String::from_utf16_lossy(&chars[..end]);
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
+                }
+            }
+            None
+        };
+
+        Some(VersionStrings {
+            product: query("ProductName"),
+            company: query("CompanyName"),
+            description: query("FileDescription"),
+            version: query("ProductVersion").or_else(|| query("FileVersion")),
+        })
+    }
+}
+
+/// Extract the file's icon at the largest size Windows will give us and encode
+/// it as PNG (RGBA). Returns None if the file has no icon or any step fails.
+fn extract_icon_png(wpath: &[u16]) -> Option<Vec<u8>> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, PrivateExtractIconsW, HICON};
+    unsafe {
+        let mut hicon: HICON = std::ptr::null_mut();
+        let mut icon_id = 0u32;
+        for size in [256i32, 48, 32] {
+            let n = PrivateExtractIconsW(wpath.as_ptr(), 0, size, size, &mut hicon, &mut icon_id, 1, 0);
+            if n > 0 && !hicon.is_null() {
+                break;
+            }
+            hicon = std::ptr::null_mut();
+        }
+        if hicon.is_null() {
+            return None;
+        }
+        let png = hicon_to_png(hicon);
+        DestroyIcon(hicon);
+        png
+    }
+}
+
+/// Rasterize an HICON's colour bitmap to 32-bit RGBA and PNG-encode it.
+unsafe fn hicon_to_png(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, DIB_RGB_COLORS,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
+
+    let mut ii: ICONINFO = std::mem::zeroed();
+    if GetIconInfo(hicon, &mut ii) == 0 {
+        return None;
+    }
+    // Free the bitmaps GetIconInfo handed us however we exit.
+    let color = ii.hbmColor;
+    let mask = ii.hbmMask;
+    let cleanup = || {
+        if !color.is_null() {
+            DeleteObject(color as _);
+        }
+        if !mask.is_null() {
+            DeleteObject(mask as _);
+        }
+    };
+
+    let mut bm: BITMAP = std::mem::zeroed();
+    if color.is_null() || GetObjectW(color as _, std::mem::size_of::<BITMAP>() as i32, &mut bm as *mut _ as *mut _) == 0 {
+        cleanup();
+        return None;
+    }
+    let (w, h) = (bm.bmWidth, bm.bmHeight);
+    if w <= 0 || h <= 0 || w > 1024 || h > 1024 {
+        cleanup();
+        return None;
+    }
+
+    // Ask GDI for the pixels as top-down 32-bit BGRA.
+    let mut bmi: BITMAPINFO = std::mem::zeroed();
+    bmi.bmiHeader.biSize = std::mem::size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = w;
+    bmi.bmiHeader.biHeight = -h; // negative => top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = 0; // BI_RGB
+
+    let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
+    let hdc = GetDC(std::ptr::null_mut());
+    let got = GetDIBits(hdc, color as _, 0, h as u32, pixels.as_mut_ptr() as *mut _, &mut bmi, DIB_RGB_COLORS);
+    ReleaseDC(std::ptr::null_mut(), hdc);
+    cleanup();
+    if got == 0 {
+        return None;
+    }
+
+    // BGRA -> RGBA. If the icon carried no alpha at all, treat it as opaque.
+    let any_alpha = pixels.chunks_exact(4).any(|p| p[3] != 0);
+    for px in pixels.chunks_exact_mut(4) {
+        px.swap(0, 2);
+        if !any_alpha {
+            px[3] = 255;
+        }
+    }
+
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, w as u32, h as u32);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().ok()?;
+        writer.write_image_data(&pixels).ok()?;
+    }
+    Some(out)
+}
