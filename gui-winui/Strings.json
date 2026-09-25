@@ -176,6 +176,15 @@
     "ai_setup_starting": "Starting the AI server…",
     "ai_setup_pulling": "Downloading model… {pct}%",
     "ai_setup_failed": "Setup failed: {reason}",
+    "ai_detecting": "Detecting your GPU…",
+    "ai_no_gpu": "No dedicated GPU",
+    "ai_recommend": "{device} · recommended: {model}",
+    "ai_setup_model": "Set up {model}",
+    "tier_high": "Plenty of VRAM — you can run larger models.",
+    "tier_good": "Enough for 8B models.",
+    "tier_mid": "Fits a 3B model comfortably.",
+    "tier_low": "Small models only.",
+    "tier_cpu": "No capable GPU — runs on CPU and will be slow.",
     "size_limit": "Storage limit",
     "size_default": "Default ({size})",
     "size_custom": "Custom limit",
@@ -413,7 +422,16 @@
     "ai_setup_installing": "Instalando Ollama…",
     "ai_setup_starting": "Iniciando el servidor de IA…",
     "ai_setup_pulling": "Descargando modelo… {pct}%",
-    "ai_setup_failed": "Error de configuración: {reason}"
+    "ai_setup_failed": "Error de configuración: {reason}",
+    "ai_detecting": "Detectando tu GPU…",
+    "ai_no_gpu": "Sin GPU dedicada",
+    "ai_recommend": "{device} · recomendado: {model}",
+    "ai_setup_model": "Instalar {model}",
+    "tier_high": "VRAM de sobra: puedes usar modelos más grandes.",
+    "tier_good": "Suficiente para modelos de 8B.",
+    "tier_mid": "Ideal para un modelo de 3B.",
+    "tier_low": "Solo modelos pequeños.",
+    "tier_cpu": "Sin GPU capaz: se ejecuta en CPU y será lento."
   },
   "pt": {
     "_name": "Português",
@@ -621,7 +639,16 @@
     "ai_setup_installing": "Instalando o Ollama…",
     "ai_setup_starting": "Iniciando o servidor de IA…",
     "ai_setup_pulling": "Baixando modelo… {pct}%",
-    "ai_setup_failed": "Falha na configuração: {reason}"
+    "ai_setup_failed": "Falha na configuração: {reason}",
+    "ai_detecting": "Detectando sua GPU…",
+    "ai_no_gpu": "Sem GPU dedicada",
+    "ai_recommend": "{device} · recomendado: {model}",
+    "ai_setup_model": "Instalar {model}",
+    "tier_high": "VRAM de sobra: você pode usar modelos maiores.",
+    "tier_good": "Suficiente para modelos de 8B.",
+    "tier_mid": "Ideal para um modelo de 3B.",
+    "tier_low": "Apenas modelos pequenos.",
+    "tier_cpu": "Sem GPU capaz: roda na CPU e será lento."
   },
   "fr": {
     "_name": "Français",
@@ -829,7 +856,16 @@
     "ai_setup_installing": "Installation d'Ollama…",
     "ai_setup_starting": "Démarrage du serveur d'IA…",
     "ai_setup_pulling": "Téléchargement du modèle… {pct} %",
-    "ai_setup_failed": "Échec de la configuration : {reason}"
+    "ai_setup_failed": "Échec de la configuration : {reason}",
+    "ai_detecting": "Détection de votre GPU…",
+    "ai_no_gpu": "Pas de GPU dédié",
+    "ai_recommend": "{device} · recommandé : {model}",
+    "ai_setup_model": "Installer {model}",
+    "tier_high": "Beaucoup de VRAM : vous pouvez utiliser de plus grands modèles.",
+    "tier_good": "Suffisant pour les modèles 8B.",
+    "tier_mid": "Convient à un modèle 3B.",
+    "tier_low": "Petits modèles uniquement.",
+    "tier_cpu": "Pas de GPU capable : s'exécute sur le CPU et sera lent."
   },
   "de": {
     "_name": "Deutsch",
@@ -1037,7 +1073,16 @@
     "ai_setup_installing": "Ollama wird installiert…",
     "ai_setup_starting": "KI-Server wird gestartet…",
     "ai_setup_pulling": "Modell wird heruntergeladen… {pct} %",
-    "ai_setup_failed": "Einrichtung fehlgeschlagen: {reason}"
+    "ai_setup_failed": "Einrichtung fehlgeschlagen: {reason}",
+    "ai_detecting": "GPU wird erkannt…",
+    "ai_no_gpu": "Keine dedizierte GPU",
+    "ai_recommend": "{device} · empfohlen: {model}",
+    "ai_setup_model": "{model} einrichten",
+    "tier_high": "Viel VRAM — größere Modelle möglich.",
+    "tier_good": "Ausreichend für 8B-Modelle.",
+    "tier_mid": "Gut für ein 3B-Modell.",
+    "tier_low": "Nur kleine Modelle.",
+    "tier_cpu": "Keine geeignete GPU — läuft auf der CPU und ist langsam."
   },
   "it": {
     "_name": "Italiano",
@@ -1245,7 +1290,16 @@
     "ai_setup_installing": "Installazione di Ollama…",
     "ai_setup_starting": "Avvio del server IA…",
     "ai_setup_pulling": "Download del modello… {pct}%",
-    "ai_setup_failed": "Configurazione non riuscita: {reason}"
+    "ai_setup_failed": "Configurazione non riuscita: {reason}",
+    "ai_detecting": "Rilevamento della GPU…",
+    "ai_no_gpu": "Nessuna GPU dedicata",
+    "ai_recommend": "{device} · consigliato: {model}",
+    "ai_setup_model": "Installa {model}",
+    "tier_high": "Molta VRAM: puoi usare modelli più grandi.",
+    "tier_good": "Sufficiente per modelli 8B.",
+    "tier_mid": "Adatto a un modello 3B.",
+    "tier_low": "Solo modelli piccoli.",
+    "tier_cpu": "Nessuna GPU adatta: gira su CPU e sarà lento."
   },
   "nl": {
     "_name": "Nederlands",
@@ -1453,7 +1507,16 @@
     "ai_setup_installing": "Ollama installeren…",
     "ai_setup_starting": "AI-server starten…",
     "ai_setup_pulling": "Model downloaden… {pct}%",
-    "ai_setup_failed": "Instellen mislukt: {reason}"
+    "ai_setup_failed": "Instellen mislukt: {reason}",
+    "ai_detecting": "Je GPU wordt gedetecteerd…",
+    "ai_no_gpu": "Geen speciale GPU",
+    "ai_recommend": "{device} · aanbevolen: {model}",
+    "ai_setup_model": "{model} instellen",
+    "tier_high": "Veel VRAM — grotere modellen mogelijk.",
+    "tier_good": "Genoeg voor 8B-modellen.",
+    "tier_mid": "Geschikt voor een 3B-model.",
+    "tier_low": "Alleen kleine modellen.",
+    "tier_cpu": "Geen geschikte GPU — draait op de CPU en is traag."
   },
   "ru": {
     "_name": "Русский",
@@ -1661,7 +1724,16 @@
     "ai_setup_installing": "Установка Ollama…",
     "ai_setup_starting": "Запуск сервера ИИ…",
     "ai_setup_pulling": "Загрузка модели… {pct}%",
-    "ai_setup_failed": "Ошибка настройки: {reason}"
+    "ai_setup_failed": "Ошибка настройки: {reason}",
+    "ai_detecting": "Определение GPU…",
+    "ai_no_gpu": "Нет выделенного GPU",
+    "ai_recommend": "{device} · рекомендуется: {model}",
+    "ai_setup_model": "Установить {model}",
+    "tier_high": "Много VRAM — можно запускать большие модели.",
+    "tier_good": "Достаточно для моделей 8B.",
+    "tier_mid": "Подходит для модели 3B.",
+    "tier_low": "Только небольшие модели.",
+    "tier_cpu": "Нет подходящего GPU — работает на CPU и будет медленно."
   },
   "uk": {
     "_name": "Українська",
@@ -1869,7 +1941,16 @@
     "ai_setup_installing": "Встановлення Ollama…",
     "ai_setup_starting": "Запуск сервера ШІ…",
     "ai_setup_pulling": "Завантаження моделі… {pct}%",
-    "ai_setup_failed": "Помилка налаштування: {reason}"
+    "ai_setup_failed": "Помилка налаштування: {reason}",
+    "ai_detecting": "Визначення GPU…",
+    "ai_no_gpu": "Немає окремого GPU",
+    "ai_recommend": "{device} · рекомендовано: {model}",
+    "ai_setup_model": "Встановити {model}",
+    "tier_high": "Багато VRAM — можна запускати більші моделі.",
+    "tier_good": "Достатньо для моделей 8B.",
+    "tier_mid": "Підходить для моделі 3B.",
+    "tier_low": "Лише невеликі моделі.",
+    "tier_cpu": "Немає придатного GPU — працює на CPU і буде повільно."
   },
   "pl": {
     "_name": "Polski",
@@ -2077,7 +2158,16 @@
     "ai_setup_installing": "Instalowanie Ollama…",
     "ai_setup_starting": "Uruchamianie serwera SI…",
     "ai_setup_pulling": "Pobieranie modelu… {pct}%",
-    "ai_setup_failed": "Konfiguracja nie powiodła się: {reason}"
+    "ai_setup_failed": "Konfiguracja nie powiodła się: {reason}",
+    "ai_detecting": "Wykrywanie GPU…",
+    "ai_no_gpu": "Brak dedykowanego GPU",
+    "ai_recommend": "{device} · zalecane: {model}",
+    "ai_setup_model": "Zainstaluj {model}",
+    "tier_high": "Dużo VRAM — możesz używać większych modeli.",
+    "tier_good": "Wystarczy do modeli 8B.",
+    "tier_mid": "Dobre do modelu 3B.",
+    "tier_low": "Tylko małe modele.",
+    "tier_cpu": "Brak odpowiedniego GPU — działa na CPU i będzie wolno."
   },
   "tr": {
     "_name": "Türkçe",
@@ -2285,7 +2375,16 @@
     "ai_setup_installing": "Ollama yükleniyor…",
     "ai_setup_starting": "Yapay zekâ sunucusu başlatılıyor…",
     "ai_setup_pulling": "Model indiriliyor… %{pct}",
-    "ai_setup_failed": "Kurulum başarısız: {reason}"
+    "ai_setup_failed": "Kurulum başarısız: {reason}",
+    "ai_detecting": "GPU algılanıyor…",
+    "ai_no_gpu": "Ayrı GPU yok",
+    "ai_recommend": "{device} · önerilen: {model}",
+    "ai_setup_model": "{model} kur",
+    "tier_high": "Bol VRAM — daha büyük modeller çalıştırabilirsiniz.",
+    "tier_good": "8B modeller için yeterli.",
+    "tier_mid": "3B model için uygun.",
+    "tier_low": "Yalnızca küçük modeller.",
+    "tier_cpu": "Uygun GPU yok — CPU'da çalışır ve yavaş olur."
   },
   "ar": {
     "_name": "العربية",
@@ -2494,7 +2593,16 @@
     "ai_setup_installing": "جارٍ تثبيت Ollama…",
     "ai_setup_starting": "جارٍ تشغيل خادم الذكاء الاصطناعي…",
     "ai_setup_pulling": "جارٍ تنزيل النموذج… {pct}%",
-    "ai_setup_failed": "فشل الإعداد: {reason}"
+    "ai_setup_failed": "فشل الإعداد: {reason}",
+    "ai_detecting": "جارٍ اكتشاف بطاقة الرسومات…",
+    "ai_no_gpu": "لا توجد بطاقة رسومات مخصصة",
+    "ai_recommend": "{device} · موصى به: {model}",
+    "ai_setup_model": "إعداد {model}",
+    "tier_high": "ذاكرة رسومات وفيرة — يمكنك تشغيل نماذج أكبر.",
+    "tier_good": "كافية لنماذج 8B.",
+    "tier_mid": "مناسبة لنموذج 3B.",
+    "tier_low": "نماذج صغيرة فقط.",
+    "tier_cpu": "لا توجد بطاقة رسومات مناسبة — يعمل على المعالج وسيكون بطيئًا."
   },
   "he": {
     "_name": "עברית",
@@ -2703,7 +2811,16 @@
     "ai_setup_installing": "מתקין את Ollama…",
     "ai_setup_starting": "מפעיל את שרת ה-AI…",
     "ai_setup_pulling": "מוריד מודל… {pct}%",
-    "ai_setup_failed": "ההגדרה נכשלה: {reason}"
+    "ai_setup_failed": "ההגדרה נכשלה: {reason}",
+    "ai_detecting": "מזהה את ה-GPU…",
+    "ai_no_gpu": "אין GPU ייעודי",
+    "ai_recommend": "{device} · מומלץ: {model}",
+    "ai_setup_model": "התקנת {model}",
+    "tier_high": "הרבה VRAM — אפשר להריץ מודלים גדולים יותר.",
+    "tier_good": "מספיק למודלים של 8B.",
+    "tier_mid": "מתאים למודל 3B.",
+    "tier_low": "מודלים קטנים בלבד.",
+    "tier_cpu": "אין GPU מתאים — רץ על ה-CPU ויהיה אטי."
   },
   "hi": {
     "_name": "हिन्दी",
@@ -2911,7 +3028,16 @@
     "ai_setup_installing": "Ollama इंस्टॉल हो रहा है…",
     "ai_setup_starting": "AI सर्वर शुरू हो रहा है…",
     "ai_setup_pulling": "मॉडल डाउनलोड हो रहा है… {pct}%",
-    "ai_setup_failed": "सेटअप विफल: {reason}"
+    "ai_setup_failed": "सेटअप विफल: {reason}",
+    "ai_detecting": "आपका GPU पहचाना जा रहा है…",
+    "ai_no_gpu": "कोई समर्पित GPU नहीं",
+    "ai_recommend": "{device} · अनुशंसित: {model}",
+    "ai_setup_model": "{model} सेट अप करें",
+    "tier_high": "भरपूर VRAM — आप बड़े मॉडल चला सकते हैं।",
+    "tier_good": "8B मॉडल के लिए पर्याप्त।",
+    "tier_mid": "3B मॉडल के लिए उपयुक्त।",
+    "tier_low": "केवल छोटे मॉडल।",
+    "tier_cpu": "कोई सक्षम GPU नहीं — CPU पर चलेगा और धीमा होगा।"
   },
   "ja": {
     "_name": "日本語",
@@ -3119,7 +3245,16 @@
     "ai_setup_installing": "Ollamaをインストール中…",
     "ai_setup_starting": "AIサーバーを起動中…",
     "ai_setup_pulling": "モデルをダウンロード中… {pct}%",
-    "ai_setup_failed": "セットアップに失敗しました: {reason}"
+    "ai_setup_failed": "セットアップに失敗しました: {reason}",
+    "ai_detecting": "GPUを検出中…",
+    "ai_no_gpu": "専用GPUなし",
+    "ai_recommend": "{device} · おすすめ: {model}",
+    "ai_setup_model": "{model} をセットアップ",
+    "tier_high": "VRAMに余裕があります。より大きなモデルを実行できます。",
+    "tier_good": "8Bモデルに十分です。",
+    "tier_mid": "3Bモデルに適しています。",
+    "tier_low": "小さいモデルのみ。",
+    "tier_cpu": "対応GPUなし。CPUで動作し、遅くなります。"
   },
   "ko": {
     "_name": "한국어",
@@ -3327,7 +3462,16 @@
     "ai_setup_installing": "Ollama 설치 중…",
     "ai_setup_starting": "AI 서버 시작 중…",
     "ai_setup_pulling": "모델 다운로드 중… {pct}%",
-    "ai_setup_failed": "설정 실패: {reason}"
+    "ai_setup_failed": "설정 실패: {reason}",
+    "ai_detecting": "GPU 감지 중…",
+    "ai_no_gpu": "전용 GPU 없음",
+    "ai_recommend": "{device} · 권장: {model}",
+    "ai_setup_model": "{model} 설정",
+    "tier_high": "VRAM이 넉넉합니다. 더 큰 모델을 실행할 수 있습니다.",
+    "tier_good": "8B 모델에 충분합니다.",
+    "tier_mid": "3B 모델에 적합합니다.",
+    "tier_low": "작은 모델만 가능합니다.",
+    "tier_cpu": "적합한 GPU가 없습니다. CPU에서 실행되어 느립니다."
   },
   "zh-Hans": {
     "_name": "简体中文",
@@ -3535,7 +3679,16 @@
     "ai_setup_installing": "正在安装 Ollama…",
     "ai_setup_starting": "正在启动 AI 服务器…",
     "ai_setup_pulling": "正在下载模型… {pct}%",
-    "ai_setup_failed": "设置失败：{reason}"
+    "ai_setup_failed": "设置失败：{reason}",
+    "ai_detecting": "正在检测 GPU…",
+    "ai_no_gpu": "无独立 GPU",
+    "ai_recommend": "{device} · 推荐：{model}",
+    "ai_setup_model": "设置 {model}",
+    "tier_high": "显存充足，可运行更大的模型。",
+    "tier_good": "足以运行 8B 模型。",
+    "tier_mid": "适合 3B 模型。",
+    "tier_low": "仅限小型模型。",
+    "tier_cpu": "无合适 GPU，将在 CPU 上运行且较慢。"
   },
   "zh-Hant": {
     "_name": "繁體中文",
@@ -3743,7 +3896,16 @@
     "ai_setup_installing": "正在安裝 Ollama…",
     "ai_setup_starting": "正在啟動 AI 伺服器…",
     "ai_setup_pulling": "正在下載模型… {pct}%",
-    "ai_setup_failed": "設定失敗：{reason}"
+    "ai_setup_failed": "設定失敗：{reason}",
+    "ai_detecting": "正在偵測 GPU…",
+    "ai_no_gpu": "無獨立 GPU",
+    "ai_recommend": "{device} · 推薦：{model}",
+    "ai_setup_model": "設定 {model}",
+    "tier_high": "顯示記憶體充足，可執行更大的模型。",
+    "tier_good": "足以執行 8B 模型。",
+    "tier_mid": "適合 3B 模型。",
+    "tier_low": "僅限小型模型。",
+    "tier_cpu": "無合適 GPU，將在 CPU 上執行且較慢。"
   },
   "id": {
     "_name": "Bahasa Indonesia",
@@ -3951,7 +4113,16 @@
     "ai_setup_installing": "Memasang Ollama…",
     "ai_setup_starting": "Memulai server AI…",
     "ai_setup_pulling": "Mengunduh model… {pct}%",
-    "ai_setup_failed": "Penyiapan gagal: {reason}"
+    "ai_setup_failed": "Penyiapan gagal: {reason}",
+    "ai_detecting": "Mendeteksi GPU Anda…",
+    "ai_no_gpu": "Tidak ada GPU khusus",
+    "ai_recommend": "{device} · disarankan: {model}",
+    "ai_setup_model": "Siapkan {model}",
+    "tier_high": "VRAM melimpah — Anda bisa menjalankan model lebih besar.",
+    "tier_good": "Cukup untuk model 8B.",
+    "tier_mid": "Cocok untuk model 3B.",
+    "tier_low": "Hanya model kecil.",
+    "tier_cpu": "Tidak ada GPU yang memadai — berjalan di CPU dan akan lambat."
   },
   "vi": {
     "_name": "Tiếng Việt",
@@ -4159,6 +4330,15 @@
     "ai_setup_installing": "Đang cài Ollama…",
     "ai_setup_starting": "Đang khởi động máy chủ AI…",
     "ai_setup_pulling": "Đang tải mô hình… {pct}%",
-    "ai_setup_failed": "Thiết lập thất bại: {reason}"
+    "ai_setup_failed": "Thiết lập thất bại: {reason}",
+    "ai_detecting": "Đang phát hiện GPU…",
+    "ai_no_gpu": "Không có GPU riêng",
+    "ai_recommend": "{device} · khuyến nghị: {model}",
+    "ai_setup_model": "Thiết lập {model}",
+    "tier_high": "Nhiều VRAM — bạn có thể chạy mô hình lớn hơn.",
+    "tier_good": "Đủ cho mô hình 8B.",
+    "tier_mid": "Phù hợp với mô hình 3B.",
+    "tier_low": "Chỉ mô hình nhỏ.",
+    "tier_cpu": "Không có GPU phù hợp — chạy trên CPU và sẽ chậm."
   }
 }

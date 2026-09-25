@@ -127,6 +127,9 @@ public partial class App : Application
             case "ai_setup":
                 _main?.ShowAiSetup(data!);
                 break;
+            case "ai_probe":
+                _main?.ShowAiProbe(data!);
+                break;
             case "ai_result":
                 _main?.ShowAiResult(data!);
                 break;

@@ -967,6 +967,8 @@ sealed class MainWindow : Window
     Button? _aiSetup;
     ProgressBar? _aiSetupBar;
     TextBlock? _aiSetupText;
+    InfoBar? _aiRec;
+    string _recModel = "";
 
     FrameworkElement AiPage()
     {
@@ -991,20 +993,26 @@ sealed class MainWindow : Window
             Title = Loc.T("checking"), Margin = new Thickness(0, 12, 0, 12) };
         col.Children.Add(_aiStatus);
 
-        // One-key: install Ollama (if missing) and pull a model.
+        // GPU-based recommendation: which model fits this device.
+        _aiRec = new InfoBar { IsClosable = false, IsOpen = true, Severity = InfoBarSeverity.Informational,
+            Title = Loc.T("ai_detecting"), Margin = new Thickness(0, 0, 0, 8) };
+
+        // One-key: install Ollama (if missing) and pull the recommended model.
         _aiSetup = new Button { Content = Loc.T("ai_setup"), Style = Ui.S("AccentButtonStyle") };
         _aiSetup.Click += (_, _) =>
         {
             _aiSetup!.IsEnabled = false;
             if (_aiSetupBar is not null) _aiSetupBar.Visibility = Visibility.Visible;
             if (_aiSetupText is not null) { _aiSetupText.Visibility = Visibility.Visible; _aiSetupText.Text = Loc.T("ai_setup_checking"); }
-            Core.Cmd("ai_setup");
+            var args = new JsonObject();
+            if (_recModel != "") args["model"] = _recModel;
+            Core.Cmd("ai_setup", args);
         };
         _aiSetupBar = new ProgressBar { IsIndeterminate = true, Minimum = 0, Maximum = 100, Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
         _aiSetupText = Ui.Secondary("");
         _aiSetupText.Visibility = Visibility.Collapsed;
         col.Children.Add(Card("", Loc.T("ai_setup"), Loc.T("ai_setup_hint"),
-            new StackPanel { Children = { _aiSetup, _aiSetupBar, _aiSetupText } }));
+            new StackPanel { Children = { _aiRec, _aiSetup, _aiSetupBar, _aiSetupText } }));
 
         _aiModel = new ComboBox { MinWidth = 260, IsEnabled = false };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_aiModel, Loc.T("ai_model"));
@@ -1040,7 +1048,26 @@ sealed class MainWindow : Window
         col.Children.Add(_aiOut);
 
         Core.Cmd("ai_status");
+        Core.Cmd("ai_probe");
         return scroll;
+    }
+
+    /// GPU detection result: name the device, the recommended model, and whether
+    /// local AI is viable here.
+    public void ShowAiProbe(JsonNode d)
+    {
+        if (_page != "ai" || _aiRec is null) return;
+        _recModel = d["model"]?.GetValue<string>() ?? "";
+        var capable = d["capable"]?.GetValue<bool>() == true;
+        var gpu = d["gpu"]?.GetValue<string>();
+        var vram = d["vram_gb"]?.GetValue<double>();
+        var tier = Loc.T(d["tier"]?.GetValue<string>() ?? "");
+        var device = gpu is null ? Loc.T("ai_no_gpu")
+            : vram is > 0 ? $"{gpu} ({vram:0.#} GB)" : gpu;
+        _aiRec.Severity = capable ? InfoBarSeverity.Success : InfoBarSeverity.Warning;
+        _aiRec.Title = Loc.T("ai_recommend", ("device", device), ("model", _recModel));
+        _aiRec.Message = tier;
+        if (_aiSetup is not null) _aiSetup.Content = Loc.T("ai_setup_model", ("model", _recModel));
     }
 
     public void ShowAiStatus(JsonNode d)

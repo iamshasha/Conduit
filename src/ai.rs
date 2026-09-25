@@ -24,6 +24,18 @@ fn agent(secs: u64) -> ureq::Agent {
         .into()
 }
 
+/// Agent for long transfers (the ~1.5 GB installer, model pulls that stream for
+/// minutes): bound connect and header wait, but never cap the total body — that
+/// single budget aborts healthy slow transfers.
+fn long_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(30)))
+        .timeout_recv_response(Some(Duration::from_secs(60)))
+        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build())
+        .build()
+        .into()
+}
+
 fn get(url: &str, secs: u64) -> Result<String, String> {
     agent(secs)
         .get(url)
@@ -81,6 +93,34 @@ pub fn status(base: &str) -> Value {
 /// enough to fetch quickly, capable enough to be useful.
 pub const DEFAULT_MODEL: &str = "llama3.2";
 
+/// Pick a model that fits the detected VRAM. Returns (model tag, tier key for
+/// the UI label, whether the device can run local AI comfortably).
+pub fn recommend(vram: Option<u64>) -> (&'static str, &'static str, bool) {
+    const GB: u64 = 1024 * 1024 * 1024;
+    match vram {
+        Some(v) if v >= 16 * GB => ("llama3.1:8b", "tier_high", true),
+        Some(v) if v >= 8 * GB => ("llama3.1:8b", "tier_good", true),
+        Some(v) if v >= 6 * GB => ("llama3.2", "tier_mid", true),
+        Some(v) if v >= 4 * GB => ("llama3.2:3b", "tier_low", true),
+        // Little or no dedicated GPU: a 1B model runs on CPU, but warn it is slow.
+        _ => ("llama3.2:1b", "tier_cpu", false),
+    }
+}
+
+/// Detect the GPU and recommend a model. UI-ready.
+pub fn probe() -> Value {
+    let gpu = crate::gpu::best();
+    let vram = gpu.as_ref().map(|(_, v)| *v);
+    let (model, tier, capable) = recommend(vram);
+    json!({
+        "gpu": gpu.as_ref().map(|(n, _)| n.as_str()),
+        "vram_gb": vram.map(|v| (v as f64 / (1024.0 * 1024.0 * 1024.0) * 10.0).round() / 10.0),
+        "model": model,
+        "tier": tier,
+        "capable": capable,
+    })
+}
+
 /// Official Ollama Windows installer. Pinned to the vendor's HTTPS host.
 #[cfg(windows)]
 const OLLAMA_SETUP_URL: &str = "https://ollama.com/download/OllamaSetup.exe";
@@ -122,7 +162,8 @@ fn install_ollama(on_event: &dyn Fn(Value)) -> Result<(), String> {
     use std::io::{Read, Write};
     on_event(json!({"stage": "download", "pct": 0}));
 
-    let mut resp = agent(600).get(OLLAMA_SETUP_URL).call().map_err(|e| friendly(&e))?;
+    // The installer is ~1.5 GB; long_agent avoids a total-body deadline.
+    let mut resp = long_agent().get(OLLAMA_SETUP_URL).call().map_err(|e| format!("could not download Ollama: {e}"))?;
     let total: u64 = resp
         .headers()
         .get("content-length")
@@ -178,7 +219,7 @@ fn wait_online(base: &str, on_event: &dyn Fn(Value)) -> Result<(), String> {
 /// newline-delimited JSON objects carrying `completed`/`total` byte counts.
 fn pull(base: &str, model: &str, on_event: &dyn Fn(Value)) -> Result<(), String> {
     use std::io::{BufRead, BufReader};
-    let resp = agent(3600)
+    let resp = long_agent()
         .post(&format!("{base}/api/pull"))
         .send_json(json!({"model": model, "stream": true}))
         .map_err(|e| friendly(&e))?;

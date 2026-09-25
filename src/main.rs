@@ -24,6 +24,7 @@
 mod ai;
 mod archive;
 mod crypto;
+mod gpu;
 mod gui;
 mod hostfs;
 mod rpc;

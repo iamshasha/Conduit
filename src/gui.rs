@@ -381,6 +381,15 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                 }
             });
         }
+        // Detect the GPU and recommend a model that fits.
+        "ai_probe" => {
+            let tx = link.sender();
+            link.rt.spawn_blocking(move || {
+                if let Some(t) = &tx {
+                    let _ = t.send(json!({"type": "ai_probe", "data": crate::ai::probe()}).to_string());
+                }
+            });
+        }
         // One-key: install a local model runner if needed and pull a model,
         // streaming progress. Heavy and user-initiated (downloads/installs a
         // vendor runtime), so it runs off the UI thread.
