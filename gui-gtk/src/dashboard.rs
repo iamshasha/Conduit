@@ -86,6 +86,7 @@ fn fill(ui: &Shared, bus: &Bus, data: &Value) {
     stack.add_titled(&overview(bus, data), Some("overview"), &t("nav_overview"));
     stack.add_titled(&sites(bus, data), Some("sites"), &t("nav_sites"));
     stack.add_titled(&activity(bus, data), Some("activity"), &t("nav_activity"));
+    stack.add_titled(&ai(ui, bus, data), Some("ai"), &t("nav_ai"));
     stack.add_titled(&settings(ui, bus, data), Some("settings"), &t("nav_settings"));
     if let Some(v) = visible {
         stack.set_visible_child_name(&v);
@@ -335,6 +336,443 @@ fn activity(bus: &Bus, d: &Value) -> ScrolledWindow {
     sw
 }
 
+// ------------------------------------------------------------------ AI page
+//
+// Local AI via Ollama (or any OpenAI-compatible endpoint). Because the whole
+// page tree is rebuilt on every snapshot, the live widgets are kept in `Ui.ai`
+// and the setup progress in `Ui.ai_state`, so a rebuild mid-download restores
+// exactly where things were. Setup progress arrives as separate `ai_setup`
+// messages (not snapshots), so a rebuild is rare during a job.
+
+/// Live handles into the AI page, replaced whenever the page is rebuilt.
+pub struct AiWidgets {
+    pub status: Label,
+    pub rec: Label,
+    pub setup_btn: Button,
+    pub pause_btn: Button,
+    pub stop_btn: Button,
+    pub progress: gtk::ProgressBar,
+    pub stage: Label,
+    pub log_view: gtk::TextView,
+    pub log_exp: gtk::Expander,
+    pub model_store: gtk::StringList,
+    pub model_dd: gtk::DropDown,
+    pub run_btn: Button,
+    pub output: gtk::TextView,
+}
+
+/// Setup state that must survive a page rebuild.
+#[derive(Default)]
+pub struct AiState {
+    pub busy: bool,
+    pub paused: bool,
+    pub pct: f64, // < 0 = indeterminate
+    pub stage: String,
+    pub log: String,
+    pub rec_model: String,
+}
+
+fn label_dim(text: &str) -> Label {
+    let l = Label::new(Some(text));
+    l.set_xalign(0.0);
+    l.set_wrap(true);
+    l.add_css_class("dim-label");
+    l
+}
+
+fn ai(ui: &Shared, bus: &Bus, d: &Value) -> ScrolledWindow {
+    let (sw, col) = page(&t("nav_ai"));
+
+    // Endpoint address + reconnect.
+    col.append(&label_dim(&t("ai_endpoint_hint")));
+    let addr = gtk::Entry::new();
+    addr.set_hexpand(true);
+    addr.set_placeholder_text(Some("http://127.0.0.1:11434"));
+    addr.set_text(d["settings"]["ai_endpoint"].as_str().unwrap_or(""));
+    let connect = Button::with_label(&t("ai_test"));
+    {
+        let (b, a) = (bus.clone(), addr.clone());
+        connect.connect_clicked(move |_| b.cmd("ai_endpoint", json!({"url": a.text().to_string()})));
+    }
+    let addr_row = GBox::new(Orientation::Horizontal, 8);
+    addr_row.append(&addr);
+    addr_row.append(&connect);
+    col.append(&addr_row);
+
+    let status = Label::new(Some(&t("checking")));
+    status.set_xalign(0.0);
+    status.add_css_class("heading");
+    status.set_margin_top(6);
+    col.append(&status);
+
+    let rec = Label::new(Some(&t("ai_detecting")));
+    rec.set_xalign(0.0);
+    rec.set_wrap(true);
+    rec.add_css_class("dim-label");
+    col.append(&rec);
+
+    // One-key setup + pause / stop.
+    let setup_btn = Button::with_label(&t("ai_setup"));
+    setup_btn.add_css_class("suggested-action");
+    let pause_btn = Button::with_label(&t("ai_pause"));
+    let stop_btn = Button::with_label(&t("ai_stop"));
+    stop_btn.add_css_class("destructive-action");
+    let ctl = GBox::new(Orientation::Horizontal, 8);
+    ctl.set_halign(Align::Start);
+    ctl.set_margin_top(4);
+    ctl.append(&setup_btn);
+    ctl.append(&pause_btn);
+    ctl.append(&stop_btn);
+    col.append(&ctl);
+
+    let stage = Label::new(None);
+    stage.set_xalign(0.0);
+    stage.add_css_class("dim-label");
+    col.append(&stage);
+    let progress = gtk::ProgressBar::new();
+    progress.set_show_text(true);
+    col.append(&progress);
+
+    // Installation log (collapsed by default).
+    let log_view = gtk::TextView::new();
+    log_view.set_editable(false);
+    log_view.set_monospace(true);
+    log_view.set_cursor_visible(false);
+    let log_sc = ScrolledWindow::new();
+    log_sc.set_child(Some(&log_view));
+    log_sc.set_min_content_height(140);
+    let log_exp = gtk::Expander::new(Some(&t("ai_setup_logs")));
+    log_exp.set_child(Some(&log_sc));
+    col.append(&log_exp);
+
+    // Model picker.
+    col.append(&label_dim(&t("ai_model")));
+    let model_store = gtk::StringList::new(&[]);
+    let model_dd = gtk::DropDown::new(Some(model_store.clone()), gtk::Expression::NONE);
+    model_dd.set_halign(Align::Start);
+    model_dd.set_width_request(260);
+    model_dd.set_sensitive(false);
+    col.append(&model_dd);
+
+    // Prompt + run + output.
+    col.append(&label_dim(&t("ai_prompt")));
+    let prompt = gtk::TextView::new();
+    prompt.set_wrap_mode(gtk::WrapMode::WordChar);
+    let prompt_sc = ScrolledWindow::new();
+    prompt_sc.set_child(Some(&prompt));
+    prompt_sc.set_min_content_height(80);
+    col.append(&prompt_sc);
+    let run_btn = Button::with_label(&t("ai_run"));
+    run_btn.add_css_class("suggested-action");
+    run_btn.set_halign(Align::Start);
+    run_btn.set_margin_top(4);
+    run_btn.set_sensitive(false);
+    col.append(&run_btn);
+    let output = gtk::TextView::new();
+    output.set_editable(false);
+    output.set_cursor_visible(false);
+    output.set_wrap_mode(gtk::WrapMode::WordChar);
+    let out_sc = ScrolledWindow::new();
+    out_sc.set_child(Some(&output));
+    out_sc.set_min_content_height(120);
+    out_sc.set_margin_top(6);
+    col.append(&out_sc);
+
+    // ---- callbacks that read/mutate shared state
+    {
+        let (uic, b) = (ui.clone(), bus.clone());
+        setup_btn.connect_clicked(move |_| {
+            let model = {
+                let mut u = uic.borrow_mut();
+                if u.ai_state.busy {
+                    return;
+                }
+                u.ai_state.busy = true;
+                u.ai_state.paused = false;
+                u.ai_state.pct = -1.0;
+                u.ai_state.stage = t("ai_setup_checking");
+                u.ai_state.log.clear();
+                u.ai_state.rec_model.clone()
+            };
+            let extra = if model.is_empty() { json!({}) } else { json!({ "model": model }) };
+            b.cmd("ai_setup", extra);
+            apply_ai_state(&uic);
+        });
+    }
+    {
+        let (uic, b) = (ui.clone(), bus.clone());
+        pause_btn.connect_clicked(move |_| {
+            let paused = {
+                let mut u = uic.borrow_mut();
+                if !u.ai_state.busy {
+                    return;
+                }
+                u.ai_state.paused = !u.ai_state.paused;
+                u.ai_state.paused
+            };
+            b.cmd(if paused { "ai_setup_pause" } else { "ai_setup_resume" }, json!({}));
+            apply_ai_state(&uic);
+        });
+    }
+    {
+        let (uic, b) = (ui.clone(), bus.clone());
+        stop_btn.connect_clicked(move |_| {
+            if !uic.borrow().ai_state.busy {
+                return;
+            }
+            b.cmd("ai_setup_cancel", json!({}));
+        });
+    }
+    {
+        let b = bus.clone();
+        let (dd, store, pr) = (model_dd.clone(), model_store.clone(), prompt.clone());
+        run_btn.connect_clicked(move |btn| {
+            let idx = dd.selected();
+            let model = if idx == u32::MAX {
+                String::new()
+            } else {
+                store.string(idx).map(|g| g.to_string()).unwrap_or_default()
+            };
+            let buf = pr.buffer();
+            let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+            if model.is_empty() || text.trim().is_empty() {
+                return;
+            }
+            btn.set_sensitive(false);
+            btn.set_label(&t("ai_running"));
+            b.cmd("ai_generate", json!({ "model": model, "prompt": text }));
+        });
+    }
+
+    ui.borrow_mut().ai = Some(AiWidgets {
+        status, rec, setup_btn, pause_btn, stop_btn, progress, stage,
+        log_view, log_exp, model_store, model_dd, run_btn, output,
+    });
+    apply_ai_state(ui);
+    // Ask the core for the current status and a GPU-based recommendation.
+    bus.cmd("ai_status", json!({}));
+    bus.cmd("ai_probe", json!({}));
+    sw
+}
+
+/// Push the stored setup state onto the live widgets.
+fn apply_ai_state(ui: &Shared) {
+    let u = ui.borrow();
+    let Some(w) = u.ai.as_ref() else { return };
+    let st = &u.ai_state;
+    w.setup_btn.set_sensitive(!st.busy);
+    w.pause_btn.set_visible(st.busy);
+    w.stop_btn.set_visible(st.busy);
+    w.pause_btn.set_label(&t(if st.paused { "ai_resume" } else { "ai_pause" }));
+    w.progress.set_visible(st.busy);
+    if st.pct >= 0.0 {
+        w.progress.set_fraction((st.pct / 100.0).clamp(0.0, 1.0));
+        w.progress.set_text(Some(&format!("{}%", st.pct as i64)));
+    } else {
+        w.progress.set_fraction(0.0);
+        w.progress.set_text(None);
+    }
+    w.stage.set_text(&st.stage);
+    w.stage.set_visible(!st.stage.is_empty());
+    w.log_exp.set_visible(!st.log.is_empty());
+    let buf = w.log_view.buffer();
+    if buf.text(&buf.start_iter(), &buf.end_iter(), false) != st.log {
+        buf.set_text(&st.log);
+    }
+}
+
+fn push_log(st: &mut AiState, line: &str) {
+    if line.trim().is_empty() {
+        return;
+    }
+    if !st.log.is_empty() {
+        st.log.push('\n');
+    }
+    st.log.push_str(line);
+    // Bound the buffer to the last 500 lines.
+    let lines: Vec<&str> = st.log.lines().collect();
+    if lines.len() > 500 {
+        st.log = lines[lines.len() - 500..].join("\n");
+    }
+}
+
+pub fn show_ai_status(ui: &Shared, d: &Value) {
+    let online = d["online"].as_bool() == Some(true);
+    let models: Vec<String> = d["models"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|m| m.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    {
+        let u = ui.borrow();
+        let Some(w) = u.ai.as_ref() else { return };
+        w.status.set_text(&if online {
+            tf("ai_online", &[("n", &models.len().to_string())])
+        } else {
+            t("ai_offline")
+        });
+        while w.model_store.n_items() > 0 {
+            w.model_store.remove(0);
+        }
+        for m in &models {
+            w.model_store.append(m);
+        }
+        if !models.is_empty() {
+            w.model_dd.set_selected(0);
+        }
+        w.model_dd.set_sensitive(!models.is_empty());
+        w.run_btn.set_sensitive(!models.is_empty());
+    }
+    apply_ai_state(ui);
+}
+
+pub fn show_ai_probe(ui: &Shared, d: &Value) {
+    let model = d["model"].as_str().unwrap_or("").to_string();
+    let device = match d["gpu"].as_str() {
+        Some(g) => match d["vram_gb"].as_f64() {
+            Some(v) if v > 0.0 => format!("{g} ({v:.1} GB)"),
+            _ => g.to_string(),
+        },
+        None => t("ai_no_gpu"),
+    };
+    let mut u = ui.borrow_mut();
+    u.ai_state.rec_model = model.clone();
+    if let Some(w) = u.ai.as_ref() {
+        w.rec.set_text(&tf("ai_recommend", &[("device", &device), ("model", &model)]));
+        w.setup_btn.set_label(&tf("ai_setup_model", &[("model", &model)]));
+    }
+}
+
+pub fn show_ai_setup(ui: &Shared, d: &Value) {
+    let stage = d["stage"].as_str().unwrap_or("");
+    {
+        let mut u = ui.borrow_mut();
+        let st = &mut u.ai_state;
+        let pct_s = |p: f64| (p as i64).to_string();
+        match stage {
+            "log" => {
+                if let Some(line) = d["line"].as_str() {
+                    push_log(st, line);
+                }
+            }
+            "paused" => {
+                st.paused = true;
+                st.stage = t("ai_setup_paused");
+            }
+            "resumed" => st.paused = false,
+            "download" => {
+                st.paused = false;
+                st.pct = d["pct"].as_f64().unwrap_or(0.0);
+                let total = d["total"].as_f64().unwrap_or(0.0);
+                let done = d["done"].as_f64().unwrap_or(0.0);
+                st.stage = if total > 0.0 {
+                    tf("ai_setup_downloading_size", &[("pct", &pct_s(st.pct)), ("done", &human(done as u64)), ("total", &human(total as u64))])
+                } else {
+                    tf("ai_setup_downloading", &[("pct", &pct_s(st.pct))])
+                };
+            }
+            "install" => {
+                st.pct = -1.0;
+                st.stage = t("ai_setup_installing");
+            }
+            "starting" => {
+                st.pct = -1.0;
+                st.stage = t("ai_setup_starting");
+            }
+            "pull" => {
+                st.paused = false;
+                st.pct = d["pct"].as_f64().unwrap_or(0.0);
+                st.stage = tf("ai_setup_pulling", &[("pct", &pct_s(st.pct))]);
+            }
+            "done" => {
+                st.busy = false;
+                st.paused = false;
+                st.pct = -1.0;
+                st.stage = t("ai_setup_done");
+                let s = st.stage.clone();
+                push_log(st, &s);
+            }
+            "cancelled" => {
+                st.busy = false;
+                st.paused = false;
+                st.pct = -1.0;
+                st.stage = t("ai_setup_stopped");
+                let s = st.stage.clone();
+                push_log(st, &s);
+            }
+            "error" => {
+                st.busy = false;
+                st.paused = false;
+                st.pct = -1.0;
+                st.stage = tf("ai_setup_failed", &[("reason", d["error"].as_str().unwrap_or(""))]);
+                let s = st.stage.clone();
+                push_log(st, &s);
+            }
+            _ => {}
+        }
+    }
+    apply_ai_state(ui);
+}
+
+pub fn show_ai_result(ui: &Shared, d: &Value) {
+    let u = ui.borrow();
+    let Some(w) = u.ai.as_ref() else { return };
+    w.run_btn.set_sensitive(true);
+    w.run_btn.set_label(&t("ai_run"));
+    let text = if d["ok"].as_bool() == Some(true) {
+        d["text"].as_str().unwrap_or("").to_string()
+    } else {
+        d["error"].as_str().unwrap_or("error").to_string()
+    };
+    w.output.buffer().set_text(&text);
+}
+
+/// Fill the Settings → "Local AI" card from Ollama's storage picture.
+pub fn show_ai_storage(ui: &Shared, bus: &Bus, d: &Value) {
+    let u = ui.borrow();
+    let Some(bx) = u.ai_storage_box.as_ref() else { return };
+    while let Some(c) = bx.first_child() {
+        bx.remove(&c);
+    }
+    let title = Label::new(Some(&t("ai_storage_title")));
+    title.set_xalign(0.0);
+    title.add_css_class("heading");
+    bx.append(&title);
+    if d["installed"].as_bool() != Some(true) {
+        bx.append(&label_dim(&t("ai_storage_none")));
+        return;
+    }
+    let models = d["models"].as_array().cloned().unwrap_or_default();
+    let msize = d["models_size"].as_u64().unwrap_or(0);
+    let dsize = d["disk_size"].as_u64().unwrap_or(0);
+    let summary = Label::new(Some(&tf(
+        "ai_storage_models",
+        &[("n", &models.len().to_string()), ("size", &human(if msize > 0 { msize } else { dsize }))],
+    )));
+    summary.set_xalign(0.0);
+    bx.append(&summary);
+    for m in &models {
+        let row = GBox::new(Orientation::Horizontal, 8);
+        let name = Label::new(Some(m["name"].as_str().unwrap_or("")));
+        name.set_xalign(0.0);
+        name.set_hexpand(true);
+        name.set_wrap(true);
+        let sz = Label::new(Some(&human(m["size"].as_u64().unwrap_or(0))));
+        sz.add_css_class("dim-label");
+        row.append(&name);
+        row.append(&sz);
+        bx.append(&row);
+    }
+    if let Some(dir) = d["models_dir"].as_str() {
+        bx.append(&label_dim(dir));
+    }
+    let open = Button::with_label(&t("ai_storage_open"));
+    open.set_halign(Align::Start);
+    open.set_margin_top(4);
+    let b = bus.clone();
+    open.connect_clicked(move |_| b.cmd("open_models_dir", json!({})));
+    bx.append(&open);
+}
+
 fn settings(ui: &Shared, bus: &Bus, d: &Value) -> ScrolledWindow {
     let (sw, col) = page(&t("nav_settings"));
     let s = d["settings"].clone();
@@ -366,7 +804,19 @@ fn settings(ui: &Shared, bus: &Bus, d: &Value) -> ScrolledWindow {
     theme_row.append(&dd);
     col.append(&theme_row);
 
-    let _ = ui;
+    // Local AI (Ollama) storage — filled on demand by show_ai_storage.
+    let ai_box = GBox::new(Orientation::Vertical, 4);
+    ai_box.add_css_class("card");
+    ai_box.set_margin_top(12);
+    let ai_title = Label::new(Some(&t("ai_storage_title")));
+    ai_title.set_xalign(0.0);
+    ai_title.add_css_class("heading");
+    ai_box.append(&ai_title);
+    ai_box.append(&label_dim(&t("ai_storage_loading")));
+    col.append(&ai_box);
+    ui.borrow_mut().ai_storage_box = Some(ai_box);
+    bus.cmd("ai_storage", json!({}));
+
     sw
 }
 

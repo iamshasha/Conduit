@@ -4,7 +4,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 private enum Page: String, CaseIterable, Identifiable {
-    case overview, sites, activity, settings
+    case overview, sites, activity, ai, settings
     var id: String { rawValue }
     var label: String { Loc.t("nav_" + rawValue) }
     var symbol: String {
@@ -12,6 +12,7 @@ private enum Page: String, CaseIterable, Identifiable {
         case .overview: return "gauge.with.dots.needle.33percent"
         case .sites: return "globe"
         case .activity: return "list.bullet.rectangle"
+        case .ai: return "brain"
         case .settings: return "gearshape"
         }
     }
@@ -34,6 +35,7 @@ struct DashboardView: View {
                     case .overview: OverviewPage()
                     case .sites: SitesPage()
                     case .activity: ActivityPage()
+                    case .ai: AiPage()
                     case .settings: SettingsPage()
                     }
                 }
@@ -281,6 +283,139 @@ private struct ActivityPage: View {
     }
 }
 
+// --------------------------------------------------------------------- AI
+
+private struct AiPage: View {
+    @EnvironmentObject var model: AppModel
+    @State private var endpoint = ""
+    @State private var prompt = ""
+    @State private var selected = ""
+    @State private var didInit = false
+
+    var body: some View {
+        let status = model.aiStatus
+        let online = status["online"].boolValue
+        let models = status["models"].array.compactMap { $0.string }
+        return PageScaffold(title: Loc.t("nav_ai")) {
+            // Endpoint.
+            Card {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(Loc.t("ai_endpoint")).font(.headline)
+                    Text(Loc.t("ai_endpoint_hint")).font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        TextField("http://127.0.0.1:11434", text: $endpoint)
+                            .textFieldStyle(.roundedBorder)
+                        Button(Loc.t("ai_test")) { model.cmd("ai_endpoint", ["url": .string(endpoint)]) }
+                    }
+                }
+            }
+
+            // Status, recommendation, one-key setup with pause/stop/log.
+            Card {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(online ? Loc.f("ai_online", ["n": String(models.count)]) : Loc.t("ai_offline"))
+                        .font(.headline)
+                    if !online { Text(Loc.t("ai_none")).font(.subheadline).foregroundStyle(.secondary) }
+                    recommendation
+                    HStack {
+                        Button(setupLabel) { model.startAiSetup() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.aiBusy)
+                        if model.aiBusy {
+                            Button(model.aiPaused ? Loc.t("ai_resume") : Loc.t("ai_pause")) { model.pauseAiSetup() }
+                            Button(Loc.t("ai_stop"), role: .destructive) { model.stopAiSetup() }
+                        }
+                    }
+                    if model.aiBusy || !model.aiStage.isEmpty { setupProgress }
+                    if !model.aiLog.isEmpty {
+                        DisclosureGroup(Loc.t("ai_setup_logs")) {
+                            ScrollView {
+                                Text(model.aiLog)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                            }
+                            .frame(height: 140)
+                        }
+                    }
+                }
+            }
+
+            // Model + prompt + run.
+            Card {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker(Loc.t("ai_model"), selection: $selected) {
+                        ForEach(models, id: \.self) { Text($0).tag($0) }
+                    }
+                    .disabled(models.isEmpty)
+                    Text(Loc.t("ai_prompt")).font(.caption).foregroundStyle(.secondary)
+                    TextEditor(text: $prompt)
+                        .frame(height: 90)
+                        .font(.body)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                    Button(model.aiRunning ? Loc.t("ai_running") : Loc.t("ai_run")) {
+                        model.runAi(model: selected, prompt: prompt)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(models.isEmpty || model.aiRunning)
+                    if !model.aiOutput.isEmpty {
+                        ScrollView {
+                            Text(model.aiOutput)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .frame(height: 140)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            if !didInit {
+                endpoint = model.snapshot["settings"]["ai_endpoint"].string ?? ""
+                didInit = true
+            }
+            model.cmd("ai_status")
+            model.cmd("ai_probe")
+        }
+        .onChange(of: models) { newModels in
+            if selected.isEmpty || !newModels.contains(selected) {
+                selected = newModels.first ?? ""
+            }
+        }
+    }
+
+    private var setupLabel: String {
+        let m = model.aiRecModel
+        return m.isEmpty ? Loc.t("ai_setup") : Loc.f("ai_setup_model", ["model": m])
+    }
+
+    @ViewBuilder private var recommendation: some View {
+        let p = model.aiProbe
+        if let m = p["model"].string, !m.isEmpty {
+            let device: String = {
+                guard let g = p["gpu"].string else { return Loc.t("ai_no_gpu") }
+                if let v = p["vram_gb"].double, v > 0 { return String(format: "%@ (%.1f GB)", g, v) }
+                return g
+            }()
+            Text(Loc.f("ai_recommend", ["device": device, "model": m]))
+                .font(.subheadline).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var setupProgress: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if model.aiPct >= 0 {
+                ProgressView(value: min(max(model.aiPct / 100, 0), 1))
+            } else if model.aiBusy {
+                ProgressView()
+            }
+            if !model.aiStage.isEmpty {
+                Text(model.aiStage).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- settings
 
 private struct SettingsPage: View {
@@ -308,6 +443,41 @@ private struct SettingsPage: View {
                     Text(Loc.t("nav_settings"))
                     Spacer()
                     Button(Loc.t("open_sandbox")) { model.cmd("open_data") }
+                }
+            }
+            aiStorageCard
+        }
+        .onAppear { model.cmd("ai_storage") }
+    }
+
+    /// Local AI (Ollama) storage: models and sizes, filled on demand.
+    @ViewBuilder private var aiStorageCard: some View {
+        let s = model.aiStorage
+        Card {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(Loc.t("ai_storage_title")).font(.headline)
+                if s.isNull {
+                    Text(Loc.t("ai_storage_loading")).font(.caption).foregroundStyle(.secondary)
+                } else if !s["installed"].boolValue {
+                    Text(Loc.t("ai_storage_none")).font(.caption).foregroundStyle(.secondary)
+                } else {
+                    let models = s["models"].array
+                    let msize = s["models_size"].double ?? 0
+                    let dsize = s["disk_size"].double ?? 0
+                    Text(Loc.f("ai_storage_models", ["n": String(models.count), "size": Fmt.bytes(msize > 0 ? msize : dsize)]))
+                    ForEach(Array(models.enumerated()), id: \.offset) { _, m in
+                        HStack {
+                            Text(m["name"].string ?? "").lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Text(Fmt.bytes(m["size"].double ?? 0)).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let dir = s["models_dir"].string {
+                        Text(dir).font(.caption2).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    Button(Loc.t("ai_storage_open")) { model.cmd("open_models_dir") }
+                        .padding(.top, 2)
                 }
             }
         }

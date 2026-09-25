@@ -35,6 +35,10 @@ struct Ui {
     toast: Option<gtk::Label>,
     toast_rev: Option<gtk::Revealer>,
     update_bar: Option<gtk::Label>,
+    // AI page: live widget handles and setup state that survive a rebuild.
+    ai: Option<dashboard::AiWidgets>,
+    ai_state: dashboard::AiState,
+    ai_storage_box: Option<gtk::Box>,
 }
 
 fn main() -> glib::ExitCode {
@@ -119,6 +123,11 @@ fn dispatch(app: &Application, ui: &Rc<RefCell<Ui>>, bus: &Bus, msg: Value) {
         }
         "toast" => dashboard::toast(ui, &loc::t(data.as_str().unwrap_or(""))),
         "update" => dashboard::show_update(ui, data),
+        "ai_status" => dashboard::show_ai_status(ui, data),
+        "ai_probe" => dashboard::show_ai_probe(ui, data),
+        "ai_setup" => dashboard::show_ai_setup(ui, data),
+        "ai_result" => dashboard::show_ai_result(ui, data),
+        "ai_storage" => dashboard::show_ai_storage(ui, bus, data),
         "consent_add" => {
             let mut u = ui.borrow_mut();
             let cw = u.consent.take().unwrap_or_else(|| consent::ConsentWindow::new(app, bus));
