@@ -271,7 +271,12 @@ fn parse_args() -> Result<Opts, String> {
             "--minimized" => o.minimized = true,
             "--wait-port" => o.wait_port = true,
             // Contents are deliberately ignored: a link can only open the window.
-            "--url" => o.url = Some(val()?),
+            // The value is optional: the Linux .desktop launcher is
+            // `conduit --url %u`, so a plain menu click (no link) runs
+            // `conduit --url` with nothing after it. Treat that as "just open"
+            // instead of erroring out — the bug where clicking the app in the
+            // menu did nothing.
+            "--url" => o.url = val().ok(),
             "-h" | "--help" => {
                 system::attach_parent_console();
                 println!("{USAGE}");

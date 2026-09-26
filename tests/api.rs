@@ -112,6 +112,19 @@ fn health_is_public() {
     assert_eq!(r["name"], json!("conduit"));
 }
 
+// The Linux .desktop launcher runs `conduit --url %u`; a menu click passes no
+// link, so the process gets a bare `--url` with no value. That must not abort
+// startup (the bug where clicking the app in the menu did nothing).
+#[test]
+fn dangling_url_flag_still_boots() {
+    let s = start(&["--url"]); // start() panics if the server never prints LISTENING
+    let r: Value = reqwest::blocking::get(format!("http://{}/health", s.addr))
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(r["ok"], json!(true));
+}
+
 #[test]
 fn rpc_needs_origin_token_and_loopback_host() {
     let s = start(&[]);
