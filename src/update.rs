@@ -107,10 +107,16 @@ pub mod install {
         UpdateManager::new(GithubSource::new(&repo, None, false), None, None).map_err(|e| e.to_string())
     }
 
-    /// Check, download (reporting 0..=100 percent through `on_progress`), then
-    /// apply and restart. On success the process is replaced and this never
-    /// returns; any failure comes back as a message for the UI.
-    pub fn run(on_progress: impl Fn(i16) + Send + 'static) -> Result<(), String> {
+    /// A downloaded update, ready to apply. Held so the caller can close the GUI
+    /// child (which otherwise locks files under `current\gui\`) before applying.
+    pub struct Prepared {
+        um: UpdateManager,
+        info: velopack::UpdateInfo,
+    }
+
+    /// Check and download (reporting 0..=100 percent through `on_progress`).
+    /// Returns the prepared update; the caller applies it with [`apply`].
+    pub fn prepare(on_progress: impl Fn(i16) + Send + 'static) -> Result<Prepared, String> {
         let um = manager()?;
         let info = match um.check_for_updates().map_err(|e| e.to_string())? {
             UpdateCheck::UpdateAvailable(u) => *u,
@@ -127,7 +133,14 @@ pub mod install {
         let dl = um.download_updates(&info, Some(tx)).map_err(|e| e.to_string());
         let _ = pump.join();
         dl?;
-        um.apply_updates_and_restart(&info).map_err(|e| e.to_string())
+        Ok(Prepared { um, info })
+    }
+
+    /// Apply the prepared update and restart. On success the process is replaced
+    /// and this never returns. Call only after the GUI child has exited, so
+    /// Velopack can swap every file under `current`.
+    pub fn apply(p: Prepared) -> Result<(), String> {
+        p.um.apply_updates_and_restart(&p.info).map_err(|e| e.to_string())
     }
 }
 

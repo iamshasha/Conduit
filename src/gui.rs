@@ -520,30 +520,41 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         // as an "update_error" toast so the UI can leave the link as a fallback.
         "install_update" => {
             let tx = link.sender();
+            let gui_pid = link.gui_pid();
             link.rt.spawn_blocking(move || {
+                let _ = &gui_pid; // used on Windows to close the GUI before apply
                 let prog = tx.clone();
                 let send_progress = move |pct: i16| {
                     if let Some(t) = &prog {
                         let _ = t.send(json!({"type": "update_progress", "data": pct}).to_string());
                     }
                 };
-                // Windows applies via Velopack; a Linux AppImage swaps itself in
-                // place. Both stream 0..=100 and restart on success (never
-                // returning here); a failure surfaces as an error toast so the
-                // UI can fall back to the release link.
-                #[cfg(windows)]
-                let result = crate::update::install::run(send_progress);
-                #[cfg(target_os = "linux")]
-                let result = crate::update::install_linux::run(send_progress);
-                #[cfg(not(any(windows, target_os = "linux")))]
-                let result = {
-                    let _ = send_progress; // macOS uses the release link instead
-                    Ok::<(), String>(())
-                };
-                if let Err(e) = result {
-                    if let Some(t) = &tx {
+                let err = |tx: &Option<mpsc::UnboundedSender<String>>, e: String| {
+                    if let Some(t) = tx {
                         let _ = t.send(json!({"type": "update_error", "data": e}).to_string());
                     }
+                };
+                // Windows: download via Velopack, then close the GUI child (it
+                // locks files under current\gui\) and apply — apply restarts and
+                // never returns. Linux swaps the AppImage in place. A failure
+                // surfaces as an error toast so the UI can offer the release link.
+                #[cfg(windows)]
+                match crate::update::install::prepare(send_progress) {
+                    Ok(prepared) => {
+                        terminate_gui(gui_pid.load(std::sync::atomic::Ordering::Relaxed));
+                        if let Err(e) = crate::update::install::apply(prepared) {
+                            err(&tx, e);
+                        }
+                    }
+                    Err(e) => err(&tx, e),
+                }
+                #[cfg(target_os = "linux")]
+                if let Err(e) = crate::update::install_linux::run(send_progress) {
+                    err(&tx, e);
+                }
+                #[cfg(not(any(windows, target_os = "linux")))]
+                {
+                    let _ = (send_progress, &err); // macOS uses the release link instead
                 }
             });
         }
@@ -734,20 +745,51 @@ fn gui_exe() -> Option<PathBuf> {
     Some(dir.join("gui").join(name))
 }
 
+/// Force-close the GUI child and wait for it to exit, so its files under
+/// `current\gui\` are unlocked before Velopack swaps the install folder. The
+/// GUI holds no unsaved state, so a hard terminate is fine.
+#[cfg(windows)]
+fn terminate_gui(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_TERMINATE};
+    const SYNCHRONIZE: u32 = 0x0010_0000; // wait access; not re-exported by windows-sys here
+    unsafe {
+        let h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, 0, pid);
+        if h.is_null() {
+            return;
+        }
+        let _ = TerminateProcess(h, 0);
+        // Give the OS a moment to release the file locks (5s cap).
+        WaitForSingleObject(h, 5000);
+        CloseHandle(h);
+    }
+}
+
 struct Link {
     rt: tokio::runtime::Handle,
     proxy: EventLoopProxy<UserEvent>,
     state: Arc<AppState>,
     tx: Mutex<Option<mpsc::UnboundedSender<String>>>,
+    /// PID of the running GUI child (0 when none). Used to close it before a
+    /// Velopack update, so it stops locking files under `current\gui\`.
+    gui_pid: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl Link {
     fn new(rt: tokio::runtime::Handle, proxy: EventLoopProxy<UserEvent>, state: Arc<AppState>) -> Self {
-        Link { rt, proxy, state, tx: Mutex::new(None) }
+        Link { rt, proxy, state, tx: Mutex::new(None), gui_pid: Arc::new(std::sync::atomic::AtomicU32::new(0)) }
     }
 
     fn sender(&self) -> Option<mpsc::UnboundedSender<String>> {
         self.tx.lock().unwrap().clone()
+    }
+
+    /// A handle to the GUI child's PID slot, for closing it off-thread.
+    fn gui_pid(&self) -> Arc<std::sync::atomic::AtomicU32> {
+        self.gui_pid.clone()
     }
 
     fn down(&self) {
@@ -804,10 +846,12 @@ impl Link {
             }
         };
         let child_pid = child.id();
+        self.gui_pid.store(child_pid, std::sync::atomic::Ordering::Relaxed);
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         *self.tx.lock().unwrap() = Some(tx);
 
         let proxy = self.proxy.clone();
+        let gui_pid = self.gui_pid.clone();
         self.rt.spawn(async move {
             let mut child = child;
             let ok = async {
@@ -860,6 +904,7 @@ impl Link {
             }
             writer.abort();
             let _ = child.wait();
+            gui_pid.store(0, std::sync::atomic::Ordering::Relaxed);
             let _ = proxy.send_event(UserEvent::GuiDown);
         });
         true
