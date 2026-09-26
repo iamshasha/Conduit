@@ -105,6 +105,13 @@ fn main() {
     // otherwise vanishes with no trace. Record it to data_dir/crash.log.
     install_panic_hook(&opts.cfg.data_dir);
 
+    // Move off the install directory. Launched from the Velopack shortcut, our
+    // working directory is `current\`, and both this process and any child that
+    // inherits it (the GUI, the Ollama server) then lock that folder — which
+    // blocks a Velopack update from swapping it. The core never resolves paths
+    // via the cwd (it uses the exe path and the data dir), so this is safe.
+    let _ = std::env::set_current_dir(std::env::temp_dir());
+
     let listener = match bind(opts.cfg.port, opts.wait_port) {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {

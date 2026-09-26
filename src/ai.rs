@@ -273,7 +273,11 @@ fn start_server(on_event: &dyn Fn(Value)) {
     cmd.arg("serve")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(std::process::Stdio::null())
+        // This server outlives us. A child inherits our working directory, and a
+        // process's cwd locks that folder — if it were our install dir
+        // (`current\`), Velopack could not swap it on update. Anchor it to temp.
+        .current_dir(std::env::temp_dir());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
