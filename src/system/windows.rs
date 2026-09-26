@@ -9,6 +9,79 @@ fn wide(s: &str) -> Vec<u16> {
     std::ffi::OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
 
+/// Force-close every process (except this one) that holds a file open under
+/// `dir`, via the Windows Restart Manager. Used right before a self-update so no
+/// leftover GUI, shell, antivirus scan or preview handler keeps the install
+/// folder locked and blocks Velopack's swap. Best-effort; returns how many it
+/// terminated.
+pub fn force_close_lockers(dir: &std::path::Path) -> u32 {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::RestartManager::{
+        RmEndSession, RmGetList, RmRegisterResources, RmStartSession, RM_PROCESS_INFO,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+
+    // Collect files under the install dir (bounded), so the Restart Manager can
+    // report which processes hold any of them open.
+    fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        if out.len() > 500 {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(dir, &mut files);
+    if files.is_empty() {
+        return 0;
+    }
+    let wides: Vec<Vec<u16>> = files.iter().map(|p| wide(&p.to_string_lossy())).collect();
+    let ptrs: Vec<*const u16> = wides.iter().map(|w| w.as_ptr()).collect();
+
+    unsafe {
+        let mut session: u32 = 0;
+        let mut key = [0u16; 33]; // CCH_RM_SESSION_KEY (32) + 1
+        if RmStartSession(&mut session, 0, key.as_mut_ptr()) != 0 {
+            return 0;
+        }
+        let mut killed = 0u32;
+        if RmRegisterResources(session, ptrs.len() as u32, ptrs.as_ptr(), 0, std::ptr::null(), 0, std::ptr::null()) == 0 {
+            let (mut needed, mut count, mut reason) = (0u32, 0u32, 0u32);
+            // First call sizes the buffer (expects ERROR_MORE_DATA).
+            RmGetList(session, &mut needed, &mut count, std::ptr::null_mut(), &mut reason);
+            if needed > 0 {
+                let mut infos = vec![std::mem::zeroed::<RM_PROCESS_INFO>(); needed as usize];
+                count = needed;
+                if RmGetList(session, &mut needed, &mut count, infos.as_mut_ptr(), &mut reason) == 0 {
+                    let self_pid = GetCurrentProcessId();
+                    for info in infos.iter().take(count as usize) {
+                        let pid = info.Process.dwProcessId;
+                        if pid == 0 || pid == self_pid {
+                            continue;
+                        }
+                        let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+                        if !h.is_null() {
+                            if TerminateProcess(h, 0) != 0 {
+                                killed += 1;
+                            }
+                            CloseHandle(h);
+                        }
+                    }
+                }
+            }
+        }
+        RmEndSession(session);
+        killed
+    }
+}
+
 /// A single, long-lived MTA-initialised thread that every COM / WinRT call runs
 /// on. The stats tick fires these from arbitrary tokio blocking threads; doing
 /// COM there meant re-initialising COM per call on threads with inconsistent
@@ -325,6 +398,39 @@ pub fn gpu_usage(ms: u32) -> Option<f64> {
         }
         PdhCloseQuery(query);
         Some(total.clamp(0.0, 100.0))
+    }
+}
+
+/// Live video-memory use of the primary adapter: (bytes in use, dedicated VRAM).
+/// Uses DXGI's QueryVideoMemoryInfo (the local memory segment). None if the
+/// adapter doesn't support it.
+pub fn gpu_memory() -> Option<(u64, u64)> {
+    use windows::core::Interface; // brings `.cast::<T>()` into scope
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+        DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO,
+    };
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        let mut best: Option<(u64, u64)> = None;
+        let mut i = 0u32;
+        while let Ok(adapter) = factory.EnumAdapters1(i) {
+            i += 1;
+            let Ok(d) = adapter.GetDesc1() else { continue };
+            if d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
+                continue;
+            }
+            let Ok(a3) = adapter.cast::<IDXGIAdapter3>() else { continue };
+            let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+            if a3.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info).is_ok() {
+                let total = d.DedicatedVideoMemory as u64;
+                // Match gpu_usage: report the adapter with the most VRAM.
+                if best.as_ref().map_or(true, |(_, t)| total > *t) {
+                    best = Some((info.CurrentUsage, total));
+                }
+            }
+        }
+        best
     }
 }
 

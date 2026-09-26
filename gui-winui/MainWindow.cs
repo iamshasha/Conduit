@@ -57,6 +57,7 @@ sealed class MainWindow : Window
     ItemsControl? _cores;
     TextBlock? _gpuText;
     ProgressBar? _gpuBar;
+    TextBlock? _gpuMemText;
     Slider? _volume;
     ToggleButton? _mute;
     Button? _playPause;
@@ -428,8 +429,10 @@ sealed class MainWindow : Window
                 _gpuBar = new ProgressBar { Maximum = 100, Value = 0 };
                 box.Children.Add(_gpuBar);
                 var vram = g["vram"]?.GetValue<double>() ?? 0;
-                if (vram > 0)
-                    box.Children.Add(Ui.Secondary($"{Loc.T("vram")}: {Ui.Bytes(vram)}"));
+                // Live used / total VRAM (filled by Stats); falls back to the
+                // total when a live sample is not available.
+                _gpuMemText = Ui.Secondary(vram > 0 ? $"{Loc.T("vram")}: {Ui.Bytes(vram)}" : "");
+                box.Children.Add(_gpuMemText);
                 col.Children.Add(Ui.Card(box));
                 break; // primary adapter's live usage; extra adapters listed below
             }
@@ -563,6 +566,13 @@ sealed class MainWindow : Window
             {
                 _gpuBar.Value = g.GetValue<double>();
                 _gpuText!.Text = $"{g.GetValue<double>():0}%";
+            }
+            var mem = s["gpu_mem"];
+            if (mem is not null && _gpuMemText is not null)
+            {
+                var mu = mem["used"]?.GetValue<double>() ?? 0;
+                var mt = mem["total"]?.GetValue<double>() ?? 0;
+                if (mt > 0) _gpuMemText.Text = $"{Loc.T("vram")}: {Ui.Bytes(mu)} / {Ui.Bytes(mt)}";
             }
         }
 
@@ -1161,8 +1171,15 @@ sealed class MainWindow : Window
             : vram is > 0 ? $"{gpu} ({vram:0.#} GB)" : gpu;
         _aiRec.Severity = capable ? InfoBarSeverity.Success : InfoBarSeverity.Warning;
         _aiRec.Title = Loc.T("ai_recommend", ("device", device), ("model", _recModel));
-        _aiRec.Message = tier;
-        if (_aiSetup is not null) _aiSetup.Content = Loc.T("ai_setup_model", ("model", _recModel));
+        // If Ollama is already here, say so and set up reuses it (no reinstall).
+        var running = d["ollama_running"]?.GetValue<bool>() == true;
+        var installed = d["ollama_installed"]?.GetValue<bool>() == true;
+        var detected = running ? Loc.T("ai_ollama_running") : installed ? Loc.T("ai_ollama_installed") : null;
+        _aiRec.Message = detected is null ? tier : $"{tier}\n{detected}";
+        if (_aiSetup is not null)
+            _aiSetup.Content = installed
+                ? Loc.T("ai_setup_model_have", ("model", _recModel))
+                : Loc.T("ai_setup_model", ("model", _recModel));
     }
 
     public void ShowAiStatus(JsonNode d)

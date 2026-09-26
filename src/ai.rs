@@ -187,17 +187,23 @@ pub fn recommend(vram: Option<u64>) -> (&'static str, &'static str, bool) {
     }
 }
 
-/// Detect the GPU and recommend a model. UI-ready.
-pub fn probe() -> Value {
+/// Detect the GPU and recommend a model, and report whether Ollama is already
+/// present so setup can reuse it instead of downloading a new copy. UI-ready.
+pub fn probe(base: &str) -> Value {
     let gpu = crate::gpu::best();
     let vram = gpu.as_ref().map(|(_, v)| *v);
     let (model, tier, capable) = recommend(vram);
+    // A running server or an installed CLI both count as "already have it".
+    let running = get(&format!("{}/api/tags", endpoint(base)), 2).is_ok();
+    let installed = running || ollama_installed();
     json!({
         "gpu": gpu.as_ref().map(|(n, _)| n.as_str()),
         "vram_gb": vram.map(|v| (v as f64 / (1024.0 * 1024.0 * 1024.0) * 10.0).round() / 10.0),
         "model": model,
         "tier": tier,
         "capable": capable,
+        "ollama_installed": installed,
+        "ollama_running": running,
     })
 }
 

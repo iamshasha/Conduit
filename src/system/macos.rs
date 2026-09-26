@@ -115,6 +115,11 @@ pub fn gpu_usage(_ms: u32) -> Option<f64> {
     None
 }
 
+pub fn gpu_memory() -> Option<(u64, u64)> {
+    // Apple Silicon shares system memory; no discrete VRAM meter here.
+    None
+}
+
 // -------------------------------------------------------------------- power
 
 pub fn power(action: &str) -> Result<(), String> {

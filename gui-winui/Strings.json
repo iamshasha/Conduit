@@ -180,6 +180,9 @@
         "ai_no_gpu": "No dedicated GPU",
         "ai_recommend": "{device} · recommended: {model}",
         "ai_setup_model": "Set up {model}",
+        "ai_setup_model_have": "Get {model}",
+        "ai_ollama_running": "Ollama is already running — it will be used.",
+        "ai_ollama_installed": "Ollama is already installed — it will be started.",
         "tier_high": "Plenty of VRAM — you can run larger models.",
         "tier_good": "Enough for 8B models.",
         "tier_mid": "Fits a 3B model comfortably.",
@@ -495,7 +498,10 @@
         "ai_uninstall": "Desinstalar",
         "ai_uninstall_confirm": "¿Quitar la aplicación Ollama? Tus modelos descargados se conservan.",
         "ai_delete_confirm": "¿Eliminar el modelo {model}? Se liberará su espacio en disco.",
-        "ai_app_removed": "Ollama desinstalado"
+        "ai_app_removed": "Ollama desinstalado",
+        "ai_setup_model_have": "Obtener {model}",
+        "ai_ollama_running": "Ollama ya está en ejecución; se usará.",
+        "ai_ollama_installed": "Ollama ya está instalado; se iniciará."
     },
     "pt": {
         "_name": "Português",
@@ -744,7 +750,10 @@
         "ai_uninstall": "Desinstalar",
         "ai_uninstall_confirm": "Remover o aplicativo Ollama? Seus modelos baixados são mantidos.",
         "ai_delete_confirm": "Excluir o modelo {model}? Isso libera o espaço em disco.",
-        "ai_app_removed": "Ollama desinstalado"
+        "ai_app_removed": "Ollama desinstalado",
+        "ai_setup_model_have": "Obter {model}",
+        "ai_ollama_running": "O Ollama já está em execução; será usado.",
+        "ai_ollama_installed": "O Ollama já está instalado; será iniciado."
     },
     "fr": {
         "_name": "Français",
@@ -993,7 +1002,10 @@
         "ai_uninstall": "Désinstaller",
         "ai_uninstall_confirm": "Supprimer l'application Ollama ? Vos modèles téléchargés sont conservés.",
         "ai_delete_confirm": "Supprimer le modèle {model} ? Cela libère son espace disque.",
-        "ai_app_removed": "Ollama désinstallé"
+        "ai_app_removed": "Ollama désinstallé",
+        "ai_setup_model_have": "Obtenir {model}",
+        "ai_ollama_running": "Ollama est déjà en cours d'exécution ; il sera utilisé.",
+        "ai_ollama_installed": "Ollama est déjà installé ; il sera démarré."
     },
     "de": {
         "_name": "Deutsch",
@@ -1242,7 +1254,10 @@
         "ai_uninstall": "Deinstallieren",
         "ai_uninstall_confirm": "Die Ollama-App entfernen? Ihre heruntergeladenen Modelle bleiben erhalten.",
         "ai_delete_confirm": "Modell {model} löschen? Das gibt seinen Speicherplatz frei.",
-        "ai_app_removed": "Ollama deinstalliert"
+        "ai_app_removed": "Ollama deinstalliert",
+        "ai_setup_model_have": "{model} laden",
+        "ai_ollama_running": "Ollama läuft bereits — es wird verwendet.",
+        "ai_ollama_installed": "Ollama ist bereits installiert — es wird gestartet."
     },
     "it": {
         "_name": "Italiano",
@@ -1491,7 +1506,10 @@
         "ai_uninstall": "Disinstalla",
         "ai_uninstall_confirm": "Rimuovere l'app Ollama? I modelli scaricati vengono mantenuti.",
         "ai_delete_confirm": "Eliminare il modello {model}? Libera il suo spazio su disco.",
-        "ai_app_removed": "Ollama disinstallato"
+        "ai_app_removed": "Ollama disinstallato",
+        "ai_setup_model_have": "Ottieni {model}",
+        "ai_ollama_running": "Ollama è già in esecuzione: verrà usato.",
+        "ai_ollama_installed": "Ollama è già installato: verrà avviato."
     },
     "nl": {
         "_name": "Nederlands",
@@ -1740,7 +1758,10 @@
         "ai_uninstall": "Verwijderen",
         "ai_uninstall_confirm": "De Ollama-app verwijderen? Je gedownloade modellen blijven behouden.",
         "ai_delete_confirm": "Model {model} verwijderen? Dit maakt schijfruimte vrij.",
-        "ai_app_removed": "Ollama verwijderd"
+        "ai_app_removed": "Ollama verwijderd",
+        "ai_setup_model_have": "{model} ophalen",
+        "ai_ollama_running": "Ollama draait al — het wordt gebruikt.",
+        "ai_ollama_installed": "Ollama is al geïnstalleerd — het wordt gestart."
     },
     "ru": {
         "_name": "Русский",
@@ -1989,7 +2010,10 @@
         "ai_uninstall": "Удалить",
         "ai_uninstall_confirm": "Удалить приложение Ollama? Загруженные модели останутся.",
         "ai_delete_confirm": "Удалить модель {model}? Это освободит место на диске.",
-        "ai_app_removed": "Ollama удалён"
+        "ai_app_removed": "Ollama удалён",
+        "ai_setup_model_have": "Загрузить {model}",
+        "ai_ollama_running": "Ollama уже запущен — он будет использован.",
+        "ai_ollama_installed": "Ollama уже установлен — он будет запущен."
     },
     "uk": {
         "_name": "Українська",
@@ -2238,7 +2262,10 @@
         "ai_uninstall": "Видалити",
         "ai_uninstall_confirm": "Видалити застосунок Ollama? Завантажені моделі залишаться.",
         "ai_delete_confirm": "Видалити модель {model}? Це звільнить місце на диску.",
-        "ai_app_removed": "Ollama видалено"
+        "ai_app_removed": "Ollama видалено",
+        "ai_setup_model_have": "Завантажити {model}",
+        "ai_ollama_running": "Ollama вже запущено — його буде використано.",
+        "ai_ollama_installed": "Ollama вже встановлено — його буде запущено."
     },
     "pl": {
         "_name": "Polski",
@@ -2487,7 +2514,10 @@
         "ai_uninstall": "Odinstaluj",
         "ai_uninstall_confirm": "Usunąć aplikację Ollama? Pobrane modele zostaną zachowane.",
         "ai_delete_confirm": "Usunąć model {model}? Zwolni to miejsce na dysku.",
-        "ai_app_removed": "Odinstalowano Ollama"
+        "ai_app_removed": "Odinstalowano Ollama",
+        "ai_setup_model_have": "Pobierz {model}",
+        "ai_ollama_running": "Ollama już działa — zostanie użyta.",
+        "ai_ollama_installed": "Ollama jest już zainstalowana — zostanie uruchomiona."
     },
     "tr": {
         "_name": "Türkçe",
@@ -2736,7 +2766,10 @@
         "ai_uninstall": "Kaldır",
         "ai_uninstall_confirm": "Ollama uygulaması kaldırılsın mı? İndirdiğiniz modeller korunur.",
         "ai_delete_confirm": "{model} modeli silinsin mi? Disk alanı boşalır.",
-        "ai_app_removed": "Ollama kaldırıldı"
+        "ai_app_removed": "Ollama kaldırıldı",
+        "ai_setup_model_have": "{model} indir",
+        "ai_ollama_running": "Ollama zaten çalışıyor — kullanılacak.",
+        "ai_ollama_installed": "Ollama zaten kurulu — başlatılacak."
     },
     "ar": {
         "_name": "العربية",
@@ -2986,7 +3019,10 @@
         "ai_uninstall": "إلغاء التثبيت",
         "ai_uninstall_confirm": "إزالة تطبيق Ollama؟ ستبقى النماذج التي نزّلتها.",
         "ai_delete_confirm": "حذف النموذج {model}؟ سيؤدي ذلك إلى تحرير مساحة القرص.",
-        "ai_app_removed": "تم إلغاء تثبيت Ollama"
+        "ai_app_removed": "تم إلغاء تثبيت Ollama",
+        "ai_setup_model_have": "الحصول على {model}",
+        "ai_ollama_running": "Ollama قيد التشغيل بالفعل — سيتم استخدامه.",
+        "ai_ollama_installed": "Ollama مثبَّت بالفعل — سيتم تشغيله."
     },
     "he": {
         "_name": "עברית",
@@ -3236,7 +3272,10 @@
         "ai_uninstall": "הסר התקנה",
         "ai_uninstall_confirm": "להסיר את אפליקציית Ollama? המודלים שהורדת יישמרו.",
         "ai_delete_confirm": "למחוק את המודל {model}? זה יפנה את שטח הדיסק שלו.",
-        "ai_app_removed": "Ollama הוסר"
+        "ai_app_removed": "Ollama הוסר",
+        "ai_setup_model_have": "הורדת {model}",
+        "ai_ollama_running": "Ollama כבר פועל — ייעשה בו שימוש.",
+        "ai_ollama_installed": "Ollama כבר מותקן — הוא יופעל."
     },
     "hi": {
         "_name": "हिन्दी",
@@ -3485,7 +3524,10 @@
         "ai_uninstall": "अनइंस्टॉल करें",
         "ai_uninstall_confirm": "Ollama ऐप हटाएँ? आपके डाउनलोड किए मॉडल बने रहेंगे।",
         "ai_delete_confirm": "मॉडल {model} हटाएँ? इससे इसकी डिस्क स्पेस खाली होगी।",
-        "ai_app_removed": "Ollama अनइंस्टॉल हो गया"
+        "ai_app_removed": "Ollama अनइंस्टॉल हो गया",
+        "ai_setup_model_have": "{model} पाएँ",
+        "ai_ollama_running": "Ollama पहले से चल रहा है — इसका उपयोग किया जाएगा।",
+        "ai_ollama_installed": "Ollama पहले से इंस्टॉल है — इसे शुरू किया जाएगा।"
     },
     "ja": {
         "_name": "日本語",
@@ -3734,7 +3776,10 @@
         "ai_uninstall": "アンインストール",
         "ai_uninstall_confirm": "Ollamaアプリを削除しますか？ダウンロード済みモデルは保持されます。",
         "ai_delete_confirm": "モデル {model} を削除しますか？ディスク領域が解放されます。",
-        "ai_app_removed": "Ollama をアンインストールしました"
+        "ai_app_removed": "Ollama をアンインストールしました",
+        "ai_setup_model_have": "{model} を取得",
+        "ai_ollama_running": "Ollama はすでに実行中です。これを使用します。",
+        "ai_ollama_installed": "Ollama はすでにインストール済みです。起動します。"
     },
     "ko": {
         "_name": "한국어",
@@ -3983,7 +4028,10 @@
         "ai_uninstall": "제거",
         "ai_uninstall_confirm": "Ollama 앱을 제거할까요? 다운로드한 모델은 유지됩니다.",
         "ai_delete_confirm": "{model} 모델을 삭제할까요? 디스크 공간이 확보됩니다.",
-        "ai_app_removed": "Ollama 제거됨"
+        "ai_app_removed": "Ollama 제거됨",
+        "ai_setup_model_have": "{model} 받기",
+        "ai_ollama_running": "Ollama가 이미 실행 중입니다 — 이것을 사용합니다.",
+        "ai_ollama_installed": "Ollama가 이미 설치되어 있습니다 — 시작합니다."
     },
     "zh-Hans": {
         "_name": "简体中文",
@@ -4232,7 +4280,10 @@
         "ai_uninstall": "卸载",
         "ai_uninstall_confirm": "移除 Ollama 应用？已下载的模型会保留。",
         "ai_delete_confirm": "删除模型 {model}？将释放其占用的磁盘空间。",
-        "ai_app_removed": "已卸载 Ollama"
+        "ai_app_removed": "已卸载 Ollama",
+        "ai_setup_model_have": "获取 {model}",
+        "ai_ollama_running": "Ollama 已在运行，将直接使用。",
+        "ai_ollama_installed": "Ollama 已安装，将启动它。"
     },
     "zh-Hant": {
         "_name": "繁體中文",
@@ -4481,7 +4532,10 @@
         "ai_uninstall": "解除安裝",
         "ai_uninstall_confirm": "移除 Ollama 應用程式？已下載的模型會保留。",
         "ai_delete_confirm": "刪除模型 {model}？將釋放其佔用的磁碟空間。",
-        "ai_app_removed": "已解除安裝 Ollama"
+        "ai_app_removed": "已解除安裝 Ollama",
+        "ai_setup_model_have": "取得 {model}",
+        "ai_ollama_running": "Ollama 已在執行，將直接使用。",
+        "ai_ollama_installed": "Ollama 已安裝，將啟動它。"
     },
     "id": {
         "_name": "Bahasa Indonesia",
@@ -4730,7 +4784,10 @@
         "ai_uninstall": "Copot pemasangan",
         "ai_uninstall_confirm": "Hapus aplikasi Ollama? Model yang sudah diunduh tetap disimpan.",
         "ai_delete_confirm": "Hapus model {model}? Ini membebaskan ruang disknya.",
-        "ai_app_removed": "Ollama dicopot"
+        "ai_app_removed": "Ollama dicopot",
+        "ai_setup_model_have": "Dapatkan {model}",
+        "ai_ollama_running": "Ollama sudah berjalan — akan digunakan.",
+        "ai_ollama_installed": "Ollama sudah terpasang — akan dijalankan."
     },
     "vi": {
         "_name": "Tiếng Việt",
@@ -4979,6 +5036,9 @@
         "ai_uninstall": "Gỡ cài đặt",
         "ai_uninstall_confirm": "Gỡ ứng dụng Ollama? Các mô hình đã tải vẫn được giữ.",
         "ai_delete_confirm": "Xóa mô hình {model}? Thao tác này giải phóng dung lượng đĩa.",
-        "ai_app_removed": "Đã gỡ Ollama"
+        "ai_app_removed": "Đã gỡ Ollama",
+        "ai_setup_model_have": "Tải {model}",
+        "ai_ollama_running": "Ollama đang chạy — sẽ được sử dụng.",
+        "ai_ollama_installed": "Ollama đã được cài — sẽ được khởi động."
     }
 }

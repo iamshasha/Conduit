@@ -160,6 +160,24 @@ pub fn gpu_usage(_ms: u32) -> Option<f64> {
     Some((vals.iter().sum::<f64>() / vals.len() as f64).clamp(0.0, 100.0))
 }
 
+pub fn gpu_memory() -> Option<(u64, u64)> {
+    // NVIDIA only; other vendors expose VRAM use differently.
+    let o = Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()?;
+    if !o.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&o.stdout);
+    let line = text.lines().next()?;
+    let mut it = line.split(',').map(|s| s.trim().parse::<u64>().ok());
+    let used = it.next()??;
+    let total = it.next()??;
+    // nvidia-smi reports mebibytes.
+    Some((used * 1024 * 1024, total * 1024 * 1024))
+}
+
 // -------------------------------------------------------------------- power
 
 pub fn power(action: &str) -> Result<(), String> {

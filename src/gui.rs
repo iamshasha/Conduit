@@ -289,6 +289,9 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                     // graph never has a missing point / gap.
                     let u = system::gpu_usage(180).unwrap_or(0.0);
                     s["gpu_usage"] = json!((u * 10.0).round() / 10.0);
+                    if let Some((used, total)) = system::gpu_memory() {
+                        s["gpu_mem"] = json!({"used": used, "total": total});
+                    }
                 }
                 s["media"] = st.media_cached(|| match system::now_playing() {
                     Ok(Some(n)) => json!({"present": true, "title": n.title, "artist": n.artist,
@@ -386,10 +389,11 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         }
         // Detect the GPU and recommend a model that fits.
         "ai_probe" => {
+            let base = state.settings().ai_endpoint;
             let tx = link.sender();
             link.rt.spawn_blocking(move || {
                 if let Some(t) = &tx {
-                    let _ = t.send(json!({"type": "ai_probe", "data": crate::ai::probe()}).to_string());
+                    let _ = t.send(json!({"type": "ai_probe", "data": crate::ai::probe(&base)}).to_string());
                 }
             });
         }
@@ -542,6 +546,14 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                 match crate::update::install::prepare(send_progress) {
                     Ok(prepared) => {
                         terminate_gui(gui_pid.load(std::sync::atomic::Ordering::Relaxed));
+                        // Force-close anything else still holding the install
+                        // folder (leftover GUI, a preview handler, an AV scan) so
+                        // Velopack can swap current\ cleanly.
+                        if let Ok(exe) = std::env::current_exe() {
+                            if let Some(dir) = exe.parent() {
+                                crate::system::force_close_lockers(dir);
+                            }
+                        }
                         if let Err(e) = crate::update::install::apply(prepared) {
                             err(&tx, e);
                         }
