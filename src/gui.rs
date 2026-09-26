@@ -491,23 +491,29 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         "install_update" => {
             let tx = link.sender();
             link.rt.spawn_blocking(move || {
-                #[cfg(windows)]
-                {
-                    let prog = tx.clone();
-                    let send_progress = move |pct: i16| {
-                        if let Some(t) = &prog {
-                            let _ = t.send(json!({"type": "update_progress", "data": pct}).to_string());
-                        }
-                    };
-                    if let Err(e) = crate::update::install::run(send_progress) {
-                        if let Some(t) = &tx {
-                            let _ = t.send(json!({"type": "update_error", "data": e}).to_string());
-                        }
+                let prog = tx.clone();
+                let send_progress = move |pct: i16| {
+                    if let Some(t) = &prog {
+                        let _ = t.send(json!({"type": "update_progress", "data": pct}).to_string());
                     }
-                }
-                #[cfg(not(windows))]
-                {
-                    let _ = &tx; // non-Windows uses the release link instead
+                };
+                // Windows applies via Velopack; a Linux AppImage swaps itself in
+                // place. Both stream 0..=100 and restart on success (never
+                // returning here); a failure surfaces as an error toast so the
+                // UI can fall back to the release link.
+                #[cfg(windows)]
+                let result = crate::update::install::run(send_progress);
+                #[cfg(target_os = "linux")]
+                let result = crate::update::install_linux::run(send_progress);
+                #[cfg(not(any(windows, target_os = "linux")))]
+                let result = {
+                    let _ = send_progress; // macOS uses the release link instead
+                    Ok::<(), String>(())
+                };
+                if let Err(e) = result {
+                    if let Some(t) = &tx {
+                        let _ = t.send(json!({"type": "update_error", "data": e}).to_string());
+                    }
                 }
             });
         }

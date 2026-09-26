@@ -83,10 +83,11 @@ fn fill(ui: &Shared, bus: &Bus, data: &Value) {
     while let Some(child) = stack.first_child() {
         stack.remove(&child);
     }
-    stack.add_titled(&overview(bus, data), Some("overview"), &t("nav_overview"));
+    stack.add_titled(&overview(ui, bus, data), Some("overview"), &t("nav_overview"));
     stack.add_titled(&sites(bus, data), Some("sites"), &t("nav_sites"));
     stack.add_titled(&activity(bus, data), Some("activity"), &t("nav_activity"));
     stack.add_titled(&ai(ui, bus, data), Some("ai"), &t("nav_ai"));
+    stack.add_titled(&help(bus, data), Some("help"), &t("nav_help"));
     stack.add_titled(&settings(ui, bus, data), Some("settings"), &t("nav_settings"));
     if let Some(v) = visible {
         stack.set_visible_child_name(&v);
@@ -137,7 +138,7 @@ fn human(bytes: u64) -> String {
     if i == 0 { format!("{bytes} B") } else { format!("{n:.1} {}", U[i]) }
 }
 
-fn overview(bus: &Bus, d: &Value) -> ScrolledWindow {
+fn overview(ui: &Shared, bus: &Bus, d: &Value) -> ScrolledWindow {
     let (sw, col) = page(&t("nav_overview"));
     let port = d["port"].as_u64().unwrap_or(0);
     let status = Label::new(Some(&tf("status_running", &[("port", &port.to_string())])));
@@ -177,10 +178,62 @@ fn overview(bus: &Bus, d: &Value) -> ScrolledWindow {
     let data_btn = Button::with_label(&t("open"));
     let b = bus.clone();
     data_btn.connect_clicked(move |_| b.cmd("open_data", json!({})));
+    // The action button (Install / Get update) reads the current update state so
+    // it can be reconnected-free across rebuilds.
+    let action = Button::new();
+    {
+        let (b, u) = (bus.clone(), ui.clone());
+        action.connect_clicked(move |_| {
+            let (cmd, url) = {
+                let st = &u.borrow().update_state;
+                (st.cmd.clone(), st.url.clone())
+            };
+            match cmd.as_str() {
+                "install_update" => {
+                    u.borrow_mut().update_state.busy = true;
+                    b.cmd("install_update", json!({}));
+                    apply_update_state(&u);
+                }
+                "open_url" if !url.is_empty() => b.cmd("open_url", json!({ "url": url })),
+                _ => {}
+            }
+        });
+    }
     actions.append(&upd);
+    actions.append(&action);
     actions.append(&data_btn);
     col.append(&actions);
+
+    let info = label_dim("");
+    info.set_margin_top(4);
+    col.append(&info);
+    let bar = gtk::ProgressBar::new();
+    bar.set_show_text(false);
+    col.append(&bar);
+
+    ui.borrow_mut().update = Some(UpdateWidgets { check_btn: upd, info, bar, action });
+    apply_update_state(ui);
     sw
+}
+
+/// Push the stored update state onto the overview widgets (called after a
+/// rebuild and after every update event).
+pub fn apply_update_state(ui: &Shared) {
+    let u = ui.borrow();
+    let (Some(w), st) = (&u.update, &u.update_state) else { return };
+    w.check_btn.set_sensitive(!st.busy);
+    w.info.set_text(&st.text);
+    w.info.set_visible(!st.text.is_empty());
+    w.bar.set_visible(st.bar);
+    if st.bar {
+        w.bar.set_fraction((st.pct / 100.0).clamp(0.0, 1.0));
+    }
+    if st.action.is_empty() {
+        w.action.set_visible(false);
+    } else {
+        w.action.set_visible(true);
+        w.action.set_label(&st.action);
+    }
 }
 
 /// Coarse "time left" for a grant's expiry label.
@@ -378,6 +431,28 @@ fn label_dim(text: &str) -> Label {
     l.set_wrap(true);
     l.add_css_class("dim-label");
     l
+}
+
+/// Live handles into the update section of the overview page.
+pub struct UpdateWidgets {
+    pub check_btn: Button,
+    pub info: Label,
+    pub bar: gtk::ProgressBar,
+    pub action: Button,
+}
+
+/// Update state that must survive a page rebuild (a download keeps going in the
+/// core while the user navigates around).
+#[derive(Default)]
+pub struct UpdateState {
+    pub text: String,
+    pub pct: f64,      // 0..=100; only shown while `bar` is true
+    pub bar: bool,     // is a download/install under way
+    pub busy: bool,    // lock the check button
+    pub action: String, // button label; empty = hidden
+    /// What the action button does: ("install_update","") or ("open_url", url).
+    pub cmd: String,
+    pub url: String,
 }
 
 fn ai(ui: &Shared, bus: &Bus, d: &Value) -> ScrolledWindow {
@@ -871,13 +946,106 @@ pub fn toast(ui: &Shared, text: &str) {
     }
 }
 
-pub fn show_update(ui: &Shared, d: &Value) {
-    let msg = if d["update"].as_bool() == Some(true) {
-        tf("update_ready", &[("latest", d["latest"].as_str().unwrap_or(""))])
-    } else if let Some(e) = d["error"].as_str() {
-        tf("update_failed", &[("reason", e)])
-    } else {
-        tf("up_to_date", &[("version", d["current"].as_str().unwrap_or(""))])
+/// Plain-language guide: what Conduit is, pairing/consent, the live permission
+/// list, privacy, and updates.
+fn help(bus: &Bus, d: &Value) -> ScrolledWindow {
+    let (sw, col) = page(&t("nav_help"));
+    let hdr = |s: &str| {
+        let l = Label::new(Some(s));
+        l.set_xalign(0.0);
+        l.set_wrap(true);
+        l.set_margin_top(10);
+        l.add_css_class("heading");
+        l
     };
-    toast(ui, &msg);
+    col.append(&label_dim(&t("help_intro")));
+
+    col.append(&hdr(&t("help_pairing_t")));
+    col.append(&label_dim(&t("help_pairing_d")));
+
+    col.append(&hdr(&t("help_perms_t")));
+    if let Some(perms) = d["perms"].as_array() {
+        for p in perms {
+            let name = p.as_str().unwrap_or("");
+            let row = GBox::new(Orientation::Vertical, 2);
+            row.set_margin_top(6);
+            let title = Label::new(Some(&t(&format!("perm_{name}"))));
+            title.set_xalign(0.0);
+            row.append(&title);
+            row.append(&label_dim(&t(&format!("perm_{name}_d"))));
+            col.append(&row);
+        }
+    }
+
+    col.append(&hdr(&t("help_privacy_t")));
+    col.append(&label_dim(&t("help_privacy_d")));
+
+    col.append(&hdr(&t("help_updates_t")));
+    col.append(&label_dim(&t("help_updates_d")));
+
+    let link = Button::with_label(&t("help_more"));
+    link.set_margin_top(12);
+    link.set_halign(gtk::Align::Start);
+    let b = bus.clone();
+    link.connect_clicked(move |_| b.cmd("open_url", json!({ "url": "https://github.com/iamshasha/Conduit" })));
+    col.append(&link);
+    sw
+}
+
+/// A finished update check. Sets the overview's update row: an Install button
+/// when this build can self-update (Windows / Linux AppImage), a Get-update
+/// link otherwise, or a plain status line.
+pub fn show_update(ui: &Shared, _bus: &Bus, d: &Value) {
+    {
+        let st = &mut ui.borrow_mut().update_state;
+        st.busy = false;
+        st.bar = false;
+        st.action.clear();
+        st.cmd.clear();
+        st.url.clear();
+        if d["ok"].as_bool() != Some(true) {
+            st.text = tf("update_failed", &[("reason", d["reason"].as_str().unwrap_or(""))]);
+        } else if d["update_available"].as_bool() == Some(true) {
+            st.text = tf("update_ready", &[("latest", d["latest"].as_str().unwrap_or(""))]);
+            if d["self_update"].as_bool() == Some(true) {
+                st.action = t("install_update");
+                st.cmd = "install_update".into();
+            } else if let Some(url) = d["url"].as_str() {
+                st.action = t("get_update");
+                st.cmd = "open_url".into();
+                st.url = url.to_string();
+            }
+        } else {
+            st.text = tf("up_to_date", &[("version", d["current"].as_str().unwrap_or(""))]);
+        }
+    }
+    apply_update_state(ui);
+}
+
+/// A download/apply progress tick (0..=100).
+pub fn show_update_progress(ui: &Shared, pct: i64) {
+    {
+        let st = &mut ui.borrow_mut().update_state;
+        st.busy = true;
+        st.bar = true;
+        st.pct = pct.clamp(0, 100) as f64;
+        st.action.clear();
+        st.text = if pct >= 100 {
+            t("update_installing")
+        } else {
+            tf("update_downloading_pct", &[("pct", &pct.to_string())])
+        };
+    }
+    apply_update_state(ui);
+}
+
+/// The in-place update failed; leave the link as a fallback.
+pub fn show_update_error(ui: &Shared, msg: &str) {
+    {
+        let st = &mut ui.borrow_mut().update_state;
+        st.busy = false;
+        st.bar = false;
+        st.text = tf("update_failed", &[("reason", msg)]);
+    }
+    apply_update_state(ui);
 }

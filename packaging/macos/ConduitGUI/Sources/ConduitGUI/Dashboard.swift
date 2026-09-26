@@ -4,7 +4,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 private enum Page: String, CaseIterable, Identifiable {
-    case overview, sites, activity, ai, settings
+    case overview, sites, activity, ai, help, settings
     var id: String { rawValue }
     var label: String { Loc.t("nav_" + rawValue) }
     var symbol: String {
@@ -13,6 +13,7 @@ private enum Page: String, CaseIterable, Identifiable {
         case .sites: return "globe"
         case .activity: return "list.bullet.rectangle"
         case .ai: return "brain"
+        case .help: return "questionmark.circle"
         case .settings: return "gearshape"
         }
     }
@@ -36,6 +37,7 @@ struct DashboardView: View {
                     case .sites: SitesPage()
                     case .activity: ActivityPage()
                     case .ai: AiPage()
+                    case .help: HelpPage()
                     case .settings: SettingsPage()
                     }
                 }
@@ -79,6 +81,46 @@ private struct Card<Content: View>: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// ------------------------------------------------------------------- help
+
+/// Plain-language guide: what Conduit is, pairing/consent, the live permission
+/// list, privacy, and updates.
+private struct HelpPage: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        let perms = model.snapshot["perms"].array.compactMap { $0.string }
+        return PageScaffold(title: Loc.t("nav_help")) {
+            Text(Loc.t("help_intro")).foregroundStyle(.secondary)
+
+            Text(Loc.t("help_pairing_t")).font(.title3.weight(.semibold))
+            Text(Loc.t("help_pairing_d")).foregroundStyle(.secondary)
+
+            Text(Loc.t("help_perms_t")).font(.title3.weight(.semibold))
+            Card {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(perms, id: \.self) { p in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(Loc.t("perm_" + p))
+                            Text(Loc.t("perm_" + p + "_d")).foregroundStyle(.secondary).font(.subheadline)
+                        }
+                    }
+                }
+            }
+
+            Text(Loc.t("help_privacy_t")).font(.title3.weight(.semibold))
+            Text(Loc.t("help_privacy_d")).foregroundStyle(.secondary)
+
+            Text(Loc.t("help_updates_t")).font(.title3.weight(.semibold))
+            Text(Loc.t("help_updates_d")).foregroundStyle(.secondary)
+
+            Button(Loc.t("help_more")) {
+                model.cmd("open_url", ["url": .string("https://github.com/iamshasha/Conduit")])
+            }
+            .padding(.top, 8)
+        }
     }
 }
 

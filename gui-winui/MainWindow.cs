@@ -16,12 +16,12 @@ namespace Conduit.Gui;
 /// </summary>
 sealed class MainWindow : Window
 {
-    static readonly string[] Pages = ["overview", "sites", "activity", "ai", "turbowarp", "settings"];
+    static readonly string[] Pages = ["overview", "sites", "activity", "ai", "turbowarp", "help", "settings"];
     static readonly Dictionary<string, string> PageGlyph = new()
     {
         ["ai"] = "",
         ["overview"] = "", ["sites"] = "", ["activity"] = "",
-        ["turbowarp"] = "", ["settings"] = "",
+        ["help"] = "\uE897", ["turbowarp"] = "", ["settings"] = "",
     };
 
     JsonNode _snap;
@@ -218,7 +218,7 @@ sealed class MainWindow : Window
                 Icon = Ui.Icon(PageGlyph[p]),
                 Tag = p,
             };
-            (p == "settings" ? _nav.FooterMenuItems : _nav.MenuItems).Add(item);
+            (p == "settings" || p == "help" ? _nav.FooterMenuItems : _nav.MenuItems).Add(item);
             if (p == _page) _nav.SelectedItem = item;
         }
         Ui.ApplyTheme(this, App.Settings?["theme"]?.GetValue<string>());
@@ -248,6 +248,7 @@ sealed class MainWindow : Window
             "activity" => ActivityPage(),
             "ai" => AiPage(),
             "turbowarp" => TurboWarpPage(),
+            "help" => HelpPage(),
             "settings" => SettingsPage(),
             _ => OverviewPage(),
         };
@@ -326,6 +327,43 @@ sealed class MainWindow : Window
         var card = Ui.Card(g);
         card.Padding = new Thickness(16, 12, 16, 12);
         return card;
+    }
+
+    // --------------------------------------------------------------- help
+
+    /// Plain-language guide: what Conduit is, how pairing/consent work, what a
+    /// site can ask for (the live permission list), privacy, and updates.
+    FrameworkElement HelpPage()
+    {
+        var (scroll, col) = Column(Loc.T("nav_help"));
+        void Para(string key)
+        {
+            var t = Ui.Secondary(Loc.T(key), "BodyTextBlockStyle");
+            t.Margin = new Thickness(0, 0, 0, 8);
+            col.Children.Add(t);
+        }
+        Para("help_intro");
+
+        col.Children.Add(GroupHeader(Loc.T("help_pairing_t")));
+        Para("help_pairing_d");
+
+        col.Children.Add(GroupHeader(Loc.T("help_perms_t")));
+        foreach (var n in _snap["perms"] as JsonArray ?? [])
+        {
+            var p = n!.GetValue<string>();
+            col.Children.Add(Card("", Loc.T("perm_" + p), Loc.T("perm_" + p + "_d")));
+        }
+
+        col.Children.Add(GroupHeader(Loc.T("help_privacy_t")));
+        Para("help_privacy_d");
+
+        col.Children.Add(GroupHeader(Loc.T("help_updates_t")));
+        Para("help_updates_d");
+
+        var link = new Button { Content = Loc.T("help_more"), Margin = new Thickness(0, 16, 0, 0) };
+        link.Click += (_, _) => Core.Cmd("open_url", new JsonObject { ["url"] = "https://github.com/iamshasha/Conduit" });
+        col.Children.Add(link);
+        return scroll;
     }
 
     // ------------------------------------------------------------ overview

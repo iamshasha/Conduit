@@ -34,11 +34,13 @@ struct Ui {
     stack: Option<gtk::Stack>,
     toast: Option<gtk::Label>,
     toast_rev: Option<gtk::Revealer>,
-    update_bar: Option<gtk::Label>,
     // AI page: live widget handles and setup state that survive a rebuild.
     ai: Option<dashboard::AiWidgets>,
     ai_state: dashboard::AiState,
     ai_storage_box: Option<gtk::Box>,
+    // Overview update section: handles + state that survive a rebuild.
+    update: Option<dashboard::UpdateWidgets>,
+    update_state: dashboard::UpdateState,
 }
 
 fn main() -> glib::ExitCode {
@@ -122,7 +124,9 @@ fn dispatch(app: &Application, ui: &Rc<RefCell<Ui>>, bus: &Bus, msg: Value) {
             }
         }
         "toast" => dashboard::toast(ui, &loc::t(data.as_str().unwrap_or(""))),
-        "update" => dashboard::show_update(ui, data),
+        "update" => dashboard::show_update(ui, bus, data),
+        "update_progress" => dashboard::show_update_progress(ui, data.as_i64().unwrap_or(0)),
+        "update_error" => dashboard::show_update_error(ui, data.as_str().unwrap_or("")),
         "ai_status" => dashboard::show_ai_status(ui, data),
         "ai_probe" => dashboard::show_ai_probe(ui, data),
         "ai_setup" => dashboard::show_ai_setup(ui, data),
