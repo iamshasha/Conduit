@@ -9,6 +9,51 @@ fn wide(s: &str) -> Vec<u16> {
     std::ffi::OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
 
+/// A single, long-lived MTA-initialised thread that every COM / WinRT call runs
+/// on. The stats tick fires these from arbitrary tokio blocking threads; doing
+/// COM there meant re-initialising COM per call on threads with inconsistent
+/// apartment state, and creating/releasing audio (IAudioEndpointVolume) and
+/// media objects across apartments — which crashed inside AudioSes/RPC with an
+/// access violation. Pinning all COM to one apartment, serialised, removes that.
+mod com {
+    use std::sync::{mpsc, OnceLock};
+
+    type Job = Box<dyn FnOnce() + Send>;
+
+    fn sender() -> &'static mpsc::Sender<Job> {
+        static TX: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
+        TX.get_or_init(|| {
+            let (tx, rx) = mpsc::channel::<Job>();
+            std::thread::Builder::new()
+                .name("conduit-com".into())
+                .spawn(move || {
+                    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+                    // Initialise the apartment once, for the life of the process.
+                    unsafe {
+                        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                    }
+                    while let Ok(job) = rx.recv() {
+                        job();
+                    }
+                })
+                .expect("spawn com thread");
+            tx
+        })
+    }
+
+    /// Run `f` on the COM apartment thread and block for its result. `f` and its
+    /// return value cross threads, but any COM objects it makes live and die
+    /// entirely inside `f` on that one thread.
+    pub fn run<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (rtx, rrx) = mpsc::channel();
+        let job: Job = Box::new(move || {
+            let _ = rtx.send(f());
+        });
+        sender().send(job).expect("com thread alive");
+        rrx.recv().expect("com thread returned")
+    }
+}
+
 // ---------------------------------------------------------------- elevation
 
 pub fn is_elevated() -> bool {
@@ -100,28 +145,28 @@ pub fn media_key(key: &str, times: u32) -> Result<(), String> {
 
 /// Runs `f` with the default playback device's volume control. Core Audio is
 /// COM, so this initialises COM on the calling (blocking) thread.
-fn with_endpoint<T>(
-    f: impl FnOnce(&windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume) -> windows::core::Result<T>,
+fn with_endpoint<T: Send + 'static>(
+    f: impl FnOnce(&windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume) -> windows::core::Result<T> + Send + 'static,
 ) -> Result<T, String> {
-    use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-    use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
-    unsafe {
-        // S_FALSE / RPC_E_CHANGED_MODE just mean COM is already up on this thread.
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    // All Core Audio COM work runs on the one apartment thread; the objects are
+    // created, used and released there and never touched from another thread.
+    com::run(move || {
+        use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+        use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
         let run = || -> windows::core::Result<T> {
-            let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-            let dev = en.GetDefaultAudioEndpoint(eRender, eConsole)?;
-            let vol: IAudioEndpointVolume = dev.Activate(CLSCTX_ALL, None)?;
+            let en: IMMDeviceEnumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }?;
+            let dev = unsafe { en.GetDefaultAudioEndpoint(eRender, eConsole) }?;
+            let vol: IAudioEndpointVolume = unsafe { dev.Activate(CLSCTX_ALL, None) }?;
             f(&vol)
         };
         run().map_err(|e| format!("audio device: {e}"))
-    }
+    })
 }
 
 /// (level 0–100, muted)
 pub fn volume_get() -> Result<(u32, bool), String> {
-    with_endpoint(|v| unsafe {
+    with_endpoint(move |v| unsafe {
         let level = v.GetMasterVolumeLevelScalar()?;
         let muted = v.GetMute()?.as_bool();
         Ok(((level * 100.0).round() as u32, muted))
@@ -129,7 +174,7 @@ pub fn volume_get() -> Result<(u32, bool), String> {
 }
 
 pub fn volume_set(level: Option<u32>, muted: Option<bool>) -> Result<(u32, bool), String> {
-    with_endpoint(|v| unsafe {
+    with_endpoint(move |v| unsafe {
         if let Some(l) = level {
             v.SetMasterVolumeLevelScalar(l.min(100) as f32 / 100.0, std::ptr::null())?;
         }
@@ -151,6 +196,10 @@ fn media_session() -> windows::core::Result<Option<windows::Media::Control::Glob
 
 /// The session Windows shows in its media flyout, if any.
 pub fn now_playing() -> Result<Option<NowPlaying>, String> {
+    com::run(now_playing_inner)
+}
+
+fn now_playing_inner() -> Result<Option<NowPlaying>, String> {
     let run = || -> windows::core::Result<Option<NowPlaying>> {
         let Some(s) = media_session()? else { return Ok(None) };
         let props = s.TryGetMediaPropertiesAsync()?.join()?;
@@ -177,6 +226,11 @@ pub fn now_playing() -> Result<Option<NowPlaying>, String> {
 /// Control the current session directly (works even when media keys are
 /// grabbed by another app). Returns whether the app accepted the command.
 pub fn media_control(action: &str) -> Result<bool, String> {
+    let action = action.to_string();
+    com::run(move || media_control_inner(&action))
+}
+
+fn media_control_inner(action: &str) -> Result<bool, String> {
     let run = || -> windows::core::Result<Option<bool>> {
         let Some(s) = media_session()? else { return Ok(None) };
         let op = match action {

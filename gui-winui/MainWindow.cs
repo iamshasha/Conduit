@@ -1502,38 +1502,71 @@ sealed class MainWindow : Window
         var models = d["models"] as JsonArray ?? new();
         var modelsSize = d["models_size"]?.GetValue<double>() ?? 0;
         var diskSize = d["disk_size"]?.GetValue<double>() ?? 0;
-        var dir = d["models_dir"]?.GetValue<string>();
+
+        // The app itself, listed and deletable separately from the models.
+        var app = d["app"];
+        if (app is not null)
+        {
+            _aiStoragePanel.Children.Add(new TextBlock
+            {
+                Text = Loc.T("ai_app_title"),
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            _aiStoragePanel.Children.Add(StorageRow(
+                app["name"]?.GetValue<string>() ?? "Ollama",
+                app["size"]?.GetValue<double>() ?? 0,
+                Loc.T("ai_uninstall"),
+                async () =>
+                {
+                    if (await Confirm(Loc.T("ai_uninstall"), Loc.T("ai_uninstall_confirm"), Loc.T("ai_uninstall")))
+                        Core.Cmd("ai_uninstall");
+                }));
+        }
 
         _aiStoragePanel.Children.Add(new TextBlock
         {
             Text = Loc.T("ai_storage_models", ("n", models.Count), ("size", Ui.Bytes(modelsSize > 0 ? modelsSize : diskSize))),
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Margin = new Thickness(0, app is not null ? 8 : 0, 0, 0),
         });
+        if (models.Count == 0)
+            _aiStoragePanel.Children.Add(Ui.Secondary(Loc.T("ai_no_models")));
         foreach (var m in models)
         {
-            var row = new Grid { ColumnSpacing = 12 };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.Children.Add(new TextBlock
-            {
-                Text = m!["name"]?.GetValue<string>() ?? "",
-                TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap,
-            });
-            var sz = Ui.Secondary(Ui.Bytes(m["size"]?.GetValue<double>() ?? 0));
-            sz.VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetColumn(sz, 1);
-            row.Children.Add(sz);
-            _aiStoragePanel.Children.Add(row);
+            var name = m!["name"]?.GetValue<string>() ?? "";
+            _aiStoragePanel.Children.Add(StorageRow(
+                name,
+                m["size"]?.GetValue<double>() ?? 0,
+                Loc.T("delete"),
+                async () =>
+                {
+                    if (await Confirm(Loc.T("delete"), Loc.T("ai_delete_confirm", ("model", name)), Loc.T("delete")))
+                        Core.Cmd("ai_delete_model", new JsonObject { ["name"] = name });
+                }));
         }
-        if (!string.IsNullOrEmpty(dir))
+    }
+
+    /// One "name … size [Delete]" row used by both the app and each model.
+    Grid StorageRow(string name, double size, string action, Func<System.Threading.Tasks.Task> onDelete)
+    {
+        var row = new Grid { ColumnSpacing = 12, Margin = new Thickness(0, 2, 0, 2) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.Children.Add(new TextBlock
         {
-            var path = Ui.Secondary(dir);
-            path.Margin = new Thickness(0, 4, 0, 0);
-            _aiStoragePanel.Children.Add(path);
-        }
-        _aiStoragePanel.Children.Add(Ui.With(
-            new Button { Content = Loc.T("ai_storage_open"), Margin = new Thickness(0, 4, 0, 0) },
-            b => b.Click += (_, _) => Core.Cmd("open_models_dir")));
+            Text = name, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap,
+        });
+        var sz = Ui.Secondary(Ui.Bytes(size));
+        sz.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(sz, 1);
+        row.Children.Add(sz);
+        var del = new Button { Content = action };
+        Grid.SetColumn(del, 2);
+        del.Click += async (_, _) => await onDelete();
+        row.Children.Add(del);
+        return row;
     }
 
     public void ShowUpdate(JsonNode d)

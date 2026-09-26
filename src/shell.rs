@@ -188,14 +188,13 @@ fn powershell() -> Option<&'static str> {
 
 fn which(bin: &str) -> bool {
     // A cheap presence check: try to run `<bin> -NoProfile -Command $null`.
-    Command::new(bin)
-        .args(["-NoProfile", "-NonInteractive", "-Command", "$null"])
+    let mut cmd = Command::new(bin);
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", "$null"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .stdin(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stdin(Stdio::null());
+    crate::system::hide_console(&mut cmd); // no console flash from the probe
+    cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
 /// Is any PowerShell available? Cheap after the first call (cached).
@@ -221,11 +220,13 @@ pub fn run(cmdlet: &str, args: &[String]) -> Result<Output, String> {
     } else {
         format!("{cmdlet} {}", args.join(" "))
     };
-    let mut child = Command::new(ps)
-        .args(["-NoProfile", "-NonInteractive", "-NoLogo", "-Command", &format!("& {{ {composed} }}")])
+    let mut cmd = Command::new(ps);
+    cmd.args(["-NoProfile", "-NonInteractive", "-NoLogo", "-Command", &format!("& {{ {composed} }}")])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    crate::system::hide_console(&mut cmd); // don't flash a console window
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("cannot start PowerShell: {e}"))?;
 

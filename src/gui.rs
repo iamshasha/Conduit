@@ -439,6 +439,36 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                 }
             });
         }
+        // Delete one downloaded model, then refresh the storage picture.
+        "ai_delete_model" => {
+            let base = state.settings().ai_endpoint;
+            let name = msg["name"].as_str().unwrap_or("").to_string();
+            let tx = link.sender();
+            link.rt.spawn_blocking(move || {
+                let res = crate::ai::delete_model(&base, &name);
+                if let Some(t) = &tx {
+                    if let Err(e) = res {
+                        let _ = t.send(json!({"type": "toast", "data": e}).to_string());
+                    }
+                    let _ = t.send(json!({"type": "ai_storage", "data": crate::ai::ollama_info(&base)}).to_string());
+                }
+            });
+        }
+        // Uninstall the Ollama app (models stay), then refresh.
+        "ai_uninstall" => {
+            let base = state.settings().ai_endpoint;
+            let tx = link.sender();
+            link.rt.spawn_blocking(move || {
+                let res = crate::ai::uninstall_ollama();
+                if let Some(t) = &tx {
+                    let _ = t.send(json!({"type": "toast", "data": match &res {
+                        Ok(()) => "ai_app_removed".to_string(),
+                        Err(e) => e.clone(),
+                    }}).to_string());
+                    let _ = t.send(json!({"type": "ai_storage", "data": crate::ai::ollama_info(&base)}).to_string());
+                }
+            });
+        }
         "set_quota" => {
             let q = msg["bytes"].as_u64();
             state.set_site_quota(origin, q);

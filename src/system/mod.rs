@@ -22,6 +22,20 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+/// Keep a child process from flashing a console window. The core runs under the
+/// Windows GUI subsystem (no console of its own), so spawning a console program
+/// like `ollama` or `powershell` otherwise pops a black window. No-op elsewhere.
+pub fn hide_console(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
 // ------------------------------------------------------------ shared types
 
 pub struct Gpu {

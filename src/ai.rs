@@ -255,14 +255,13 @@ fn ollama_bin() -> PathBuf {
 
 /// Is the Ollama CLI present? `--version` answers even when the server is down.
 fn ollama_installed() -> bool {
-    std::process::Command::new(ollama_bin())
-        .arg("--version")
+    let mut cmd = std::process::Command::new(ollama_bin());
+    cmd.arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(std::process::Stdio::null());
+    crate::system::hide_console(&mut cmd); // no console flash on the GUI-subsystem core
+    cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
 /// Best-effort: launch `ollama serve`. If the desktop app already runs a server
@@ -298,10 +297,10 @@ fn install_ollama(on_event: &dyn Fn(Value)) -> Result<(), String> {
     on_event(json!({"stage": "install"}));
     log(on_event, "Running the installer (silent)…");
     // Inno Setup silent switches: no UI, no prompts, no reboot.
-    let status = std::process::Command::new(&path)
-        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
-        .status()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(&path);
+    cmd.args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]);
+    crate::system::hide_console(&mut cmd);
+    let status = cmd.status().map_err(|e| e.to_string())?;
     if !status.success() {
         return Err("the Ollama installer did not complete".into());
     }
@@ -482,6 +481,70 @@ fn pull(base: &str, model: &str, on_event: &dyn Fn(Value)) -> Result<(), String>
 }
 
 /// On-disk models directory (OLLAMA_MODELS, else ~/.ollama/models).
+/// The Ollama application itself (listed separately from the models so each can
+/// be deleted on its own). Windows: the install folder, its size and the Inno
+/// Setup uninstaller. None elsewhere / when not installed.
+#[cfg(windows)]
+fn ollama_app() -> Option<Value> {
+    let exe = ollama_bin();
+    let dir = exe.parent()?.to_path_buf();
+    if !dir.join("ollama.exe").is_file() {
+        return None;
+    }
+    let size = crate::sandbox::usage(&dir).0;
+    let uninstaller = std::fs::read_dir(&dir).ok().and_then(|rd| {
+        rd.flatten().map(|e| e.path()).find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("unins") && n.ends_with(".exe"))
+        })
+    });
+    Some(json!({
+        "name": "Ollama",
+        "size": size,
+        "dir": dir.to_string_lossy(),
+        "uninstaller": uninstaller.as_ref().map(|p| p.to_string_lossy().to_string()),
+    }))
+}
+
+#[cfg(not(windows))]
+fn ollama_app() -> Option<Value> {
+    None
+}
+
+/// Delete one model from the local server (Ollama `DELETE /api/delete`).
+pub fn delete_model(base: &str, name: &str) -> Result<(), String> {
+    let base = endpoint(base);
+    // Accept both the current ("model") and older ("name") request keys.
+    agent(30)
+        .delete(format!("{base}/api/delete"))
+        .force_send_body()
+        .send_json(json!({"model": name, "name": name}))
+        .map_err(|e| friendly(&e))?;
+    Ok(())
+}
+
+/// Uninstall the Ollama application (silent). The models are left in place; the
+/// caller deletes those separately. Windows only.
+#[cfg(windows)]
+pub fn uninstall_ollama() -> Result<(), String> {
+    let app = ollama_app().ok_or("Ollama is not installed")?;
+    let unins = app["uninstaller"].as_str().ok_or("no uninstaller was found")?;
+    let mut cmd = std::process::Command::new(unins);
+    cmd.args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]);
+    crate::system::hide_console(&mut cmd);
+    if cmd.status().map_err(|e| e.to_string())?.success() {
+        Ok(())
+    } else {
+        Err("the uninstaller did not complete".into())
+    }
+}
+
+#[cfg(not(windows))]
+pub fn uninstall_ollama() -> Result<(), String> {
+    Err("uninstalling Ollama from here is only supported on Windows".into())
+}
+
 pub fn models_dir() -> Option<PathBuf> {
     std::env::var_os("OLLAMA_MODELS")
         .map(PathBuf::from)
@@ -517,6 +580,7 @@ pub fn ollama_info(base: &str) -> Value {
     json!({
         "installed": installed || online,
         "online": online,
+        "app": ollama_app(),
         "models": models,
         "models_size": models_total,
         "disk_size": disk,
