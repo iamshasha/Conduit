@@ -85,6 +85,10 @@ Delete a grant line to revoke access; a page can revoke its own with the `revoke
 
 ## Protocol
 
+Building a site against Conduit? See the full API reference in
+[`docs/DEVELOPERS.md`](docs/DEVELOPERS.md) — endpoints, pairing, every method
+and its params, the WebSocket events, and limits.
+
 Pair once (this is what triggers the console prompt):
 
 ```bash
