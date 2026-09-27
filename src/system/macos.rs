@@ -115,6 +115,11 @@ pub fn gpu_usage(_ms: u32) -> Option<f64> {
     None
 }
 
+pub fn gpu_memory() -> Option<(u64, u64)> {
+    // Apple Silicon shares system memory; no discrete VRAM meter here.
+    None
+}
+
 // -------------------------------------------------------------------- power
 
 pub fn power(action: &str) -> Result<(), String> {
@@ -200,3 +205,9 @@ pub fn autostart_enabled() -> bool {
 }
 
 pub fn attach_parent_console() {}
+
+/// App metadata. Filesystem basics only for now; extracting an .icns from an
+/// .app bundle is not yet implemented, so no icon is returned.
+pub fn app_meta(path: &std::path::Path) -> super::AppMeta {
+    super::basic_meta(path)
+}

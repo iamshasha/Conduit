@@ -133,6 +133,9 @@ public partial class App : Application
             case "ai_result":
                 _main?.ShowAiResult(data!);
                 break;
+            case "ai_storage":
+                _main?.ShowAiStorage(data!);
+                break;
             case "consent_add":
                 Consent().Add(data!);
                 break;

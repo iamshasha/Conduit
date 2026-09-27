@@ -96,6 +96,9 @@ pub fn run(state: Arc<AppState>, rt: tokio::runtime::Runtime, listener: std::net
 
             Event::UserEvent(UserEvent::GuiDown) => {
                 link.down();
+                // A closed/crashed GUI can't drive or watch an AI setup; stop it
+                // so a paused job never parks a worker thread forever.
+                crate::ai::request_cancel();
                 // A crashed GUI can't answer: never leave a prompt dangling.
                 for r in state.pending_consents() {
                     state.answer(r.id, ConsentAnswer::default());
@@ -286,6 +289,9 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                     // graph never has a missing point / gap.
                     let u = system::gpu_usage(180).unwrap_or(0.0);
                     s["gpu_usage"] = json!((u * 10.0).round() / 10.0);
+                    if let Some((used, total)) = system::gpu_memory() {
+                        s["gpu_mem"] = json!({"used": used, "total": total});
+                    }
                 }
                 s["media"] = st.media_cached(|| match system::now_playing() {
                     Ok(Some(n)) => json!({"present": true, "title": n.title, "artist": n.artist,
@@ -383,10 +389,11 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         }
         // Detect the GPU and recommend a model that fits.
         "ai_probe" => {
+            let base = state.settings().ai_endpoint;
             let tx = link.sender();
             link.rt.spawn_blocking(move || {
                 if let Some(t) = &tx {
-                    let _ = t.send(json!({"type": "ai_probe", "data": crate::ai::probe()}).to_string());
+                    let _ = t.send(json!({"type": "ai_probe", "data": crate::ai::probe(&base)}).to_string());
                 }
             });
         }
@@ -394,6 +401,12 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         // streaming progress. Heavy and user-initiated (downloads/installs a
         // vendor runtime), so it runs off the UI thread.
         "ai_setup" => {
+            // Refuse a second concurrent run so a double-click can't start two
+            // downloads. The atomic claim is the authority, not the button state.
+            if !crate::ai::try_begin() {
+                link.send_if_up(json!({"type": "toast", "data": "ai_setup_busy"}));
+                return;
+            }
             let base = state.settings().ai_endpoint;
             let model = msg["model"].as_str().unwrap_or("").to_string();
             let tx = link.sender();
@@ -410,7 +423,53 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
                             let _ = t.send(json!({"type": "ai_status", "data": crate::ai::status(&base)}).to_string());
                         }
                     }
+                    // The user stopping the job is not an error to shout about.
+                    Err(ref e) if e == "__cancelled__" => emit(json!({"stage": "cancelled"})),
                     Err(e) => emit(json!({"stage": "error", "error": e})),
+                }
+                crate::ai::finish();
+            });
+        }
+        "ai_setup_pause" => crate::ai::request_pause(),
+        "ai_setup_resume" => crate::ai::request_resume(),
+        "ai_setup_cancel" => crate::ai::request_cancel(),
+        // Ollama storage picture for Settings → Storage (on demand: scans a dir).
+        "ai_storage" => {
+            let base = state.settings().ai_endpoint;
+            let tx = link.sender();
+            link.rt.spawn_blocking(move || {
+                if let Some(t) = &tx {
+                    let _ = t.send(json!({"type": "ai_storage", "data": crate::ai::ollama_info(&base)}).to_string());
+                }
+            });
+        }
+        // Delete one downloaded model, then refresh the storage picture.
+        "ai_delete_model" => {
+            let base = state.settings().ai_endpoint;
+            let name = msg["name"].as_str().unwrap_or("").to_string();
+            let tx = link.sender();
+            link.rt.spawn_blocking(move || {
+                let res = crate::ai::delete_model(&base, &name);
+                if let Some(t) = &tx {
+                    if let Err(e) = res {
+                        let _ = t.send(json!({"type": "toast", "data": e}).to_string());
+                    }
+                    let _ = t.send(json!({"type": "ai_storage", "data": crate::ai::ollama_info(&base)}).to_string());
+                }
+            });
+        }
+        // Uninstall the Ollama app (models stay), then refresh.
+        "ai_uninstall" => {
+            let base = state.settings().ai_endpoint;
+            let tx = link.sender();
+            link.rt.spawn_blocking(move || {
+                let res = crate::ai::uninstall_ollama();
+                if let Some(t) = &tx {
+                    let _ = t.send(json!({"type": "toast", "data": match &res {
+                        Ok(()) => "ai_app_removed".to_string(),
+                        Err(e) => e.clone(),
+                    }}).to_string());
+                    let _ = t.send(json!({"type": "ai_storage", "data": crate::ai::ollama_info(&base)}).to_string());
                 }
             });
         }
@@ -465,24 +524,49 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
         // as an "update_error" toast so the UI can leave the link as a fallback.
         "install_update" => {
             let tx = link.sender();
+            let gui_pid = link.gui_pid();
             link.rt.spawn_blocking(move || {
+                let _ = &gui_pid; // used on Windows to close the GUI before apply
+                let prog = tx.clone();
+                let send_progress = move |pct: i16| {
+                    if let Some(t) = &prog {
+                        let _ = t.send(json!({"type": "update_progress", "data": pct}).to_string());
+                    }
+                };
+                let err = |tx: &Option<mpsc::UnboundedSender<String>>, e: String| {
+                    if let Some(t) = tx {
+                        let _ = t.send(json!({"type": "update_error", "data": e}).to_string());
+                    }
+                };
+                // Windows: download via Velopack, then close the GUI child (it
+                // locks files under current\gui\) and apply — apply restarts and
+                // never returns. Linux swaps the AppImage in place. A failure
+                // surfaces as an error toast so the UI can offer the release link.
                 #[cfg(windows)]
-                {
-                    let prog = tx.clone();
-                    let send_progress = move |pct: i16| {
-                        if let Some(t) = &prog {
-                            let _ = t.send(json!({"type": "update_progress", "data": pct}).to_string());
+                match crate::update::install::prepare(send_progress) {
+                    Ok(prepared) => {
+                        terminate_gui(gui_pid.load(std::sync::atomic::Ordering::Relaxed));
+                        // Force-close anything else still holding the install
+                        // folder (leftover GUI, a preview handler, an AV scan) so
+                        // Velopack can swap current\ cleanly.
+                        if let Ok(exe) = std::env::current_exe() {
+                            if let Some(dir) = exe.parent() {
+                                crate::system::force_close_lockers(dir);
+                            }
                         }
-                    };
-                    if let Err(e) = crate::update::install::run(send_progress) {
-                        if let Some(t) = &tx {
-                            let _ = t.send(json!({"type": "update_error", "data": e}).to_string());
+                        if let Err(e) = crate::update::install::apply(prepared) {
+                            err(&tx, e);
                         }
                     }
+                    Err(e) => err(&tx, e),
                 }
-                #[cfg(not(windows))]
+                #[cfg(target_os = "linux")]
+                if let Err(e) = crate::update::install_linux::run(send_progress) {
+                    err(&tx, e);
+                }
+                #[cfg(not(any(windows, target_os = "linux")))]
                 {
-                    let _ = &tx; // non-Windows uses the release link instead
+                    let _ = (send_progress, &err); // macOS uses the release link instead
                 }
             });
         }
@@ -623,6 +707,10 @@ fn handle(state: &Arc<AppState>, link: &Link, cmd: &str, msg: &Value) {
             toast(system::reveal(&dir, false));
         }
         "open_data" => toast(system::reveal(&state.cfg.data_dir, false)),
+        "open_models_dir" => match crate::ai::models_dir() {
+            Some(dir) if dir.is_dir() => toast(system::reveal(&dir, false)),
+            _ => link.send_if_up(json!({"type": "toast", "data": "ai_storage_none"})),
+        },
         "protocol" => {
             toast(system::set_protocol(msg["on"].as_bool().unwrap_or(false)));
             refresh();
@@ -669,20 +757,51 @@ fn gui_exe() -> Option<PathBuf> {
     Some(dir.join("gui").join(name))
 }
 
+/// Force-close the GUI child and wait for it to exit, so its files under
+/// `current\gui\` are unlocked before Velopack swaps the install folder. The
+/// GUI holds no unsaved state, so a hard terminate is fine.
+#[cfg(windows)]
+fn terminate_gui(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_TERMINATE};
+    const SYNCHRONIZE: u32 = 0x0010_0000; // wait access; not re-exported by windows-sys here
+    unsafe {
+        let h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, 0, pid);
+        if h.is_null() {
+            return;
+        }
+        let _ = TerminateProcess(h, 0);
+        // Give the OS a moment to release the file locks (5s cap).
+        WaitForSingleObject(h, 5000);
+        CloseHandle(h);
+    }
+}
+
 struct Link {
     rt: tokio::runtime::Handle,
     proxy: EventLoopProxy<UserEvent>,
     state: Arc<AppState>,
     tx: Mutex<Option<mpsc::UnboundedSender<String>>>,
+    /// PID of the running GUI child (0 when none). Used to close it before a
+    /// Velopack update, so it stops locking files under `current\gui\`.
+    gui_pid: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl Link {
     fn new(rt: tokio::runtime::Handle, proxy: EventLoopProxy<UserEvent>, state: Arc<AppState>) -> Self {
-        Link { rt, proxy, state, tx: Mutex::new(None) }
+        Link { rt, proxy, state, tx: Mutex::new(None), gui_pid: Arc::new(std::sync::atomic::AtomicU32::new(0)) }
     }
 
     fn sender(&self) -> Option<mpsc::UnboundedSender<String>> {
         self.tx.lock().unwrap().clone()
+    }
+
+    /// A handle to the GUI child's PID slot, for closing it off-thread.
+    fn gui_pid(&self) -> Arc<std::sync::atomic::AtomicU32> {
+        self.gui_pid.clone()
     }
 
     fn down(&self) {
@@ -739,10 +858,12 @@ impl Link {
             }
         };
         let child_pid = child.id();
+        self.gui_pid.store(child_pid, std::sync::atomic::Ordering::Relaxed);
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         *self.tx.lock().unwrap() = Some(tx);
 
         let proxy = self.proxy.clone();
+        let gui_pid = self.gui_pid.clone();
         self.rt.spawn(async move {
             let mut child = child;
             let ok = async {
@@ -795,6 +916,7 @@ impl Link {
             }
             writer.abort();
             let _ = child.wait();
+            gui_pid.store(0, std::sync::atomic::Ordering::Relaxed);
             let _ = proxy.send_event(UserEvent::GuiDown);
         });
         true

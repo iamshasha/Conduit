@@ -22,6 +22,20 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+/// Keep a child process from flashing a console window. The core runs under the
+/// Windows GUI subsystem (no console of its own), so spawning a console program
+/// like `ollama` or `powershell` otherwise pops a black window. No-op elsewhere.
+pub fn hide_console(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
 // ------------------------------------------------------------ shared types
 
 pub struct Gpu {
@@ -47,6 +61,27 @@ pub struct NowPlaying {
     pub app: String,
 }
 
+/// Everything a page can learn about an executable it may launch: identifying
+/// text plus, where a backend can produce one, the app's icon as PNG bytes.
+#[derive(Default)]
+pub struct AppMeta {
+    /// Absolute path on disk.
+    pub path: String,
+    /// Best display name (product/description on Windows, else the file stem).
+    pub name: String,
+    /// The file's own name, e.g. "chrome.exe".
+    pub file_name: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// Last-modified time, Unix seconds (0 if unknown).
+    pub modified: u64,
+    pub version: Option<String>,
+    pub publisher: Option<String>,
+    pub description: Option<String>,
+    /// The app icon as raw PNG bytes, when the platform backend can extract one.
+    pub icon_png: Option<Vec<u8>>,
+}
+
 // -------------------------------------------------------------- constants
 
 /// Names accepted by `sys.media`.
@@ -60,6 +95,33 @@ pub fn exe_path() -> String {
     std::env::current_exe()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// Fill the fields every platform can produce from the filesystem alone. The
+/// per-OS `app_meta` starts here and enriches it (version info, icon, …).
+pub(crate) fn basic_meta(path: &std::path::Path) -> AppMeta {
+    let md = std::fs::metadata(path).ok();
+    let modified = md
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let file_name = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    // A readable default name: the stem without its extension.
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| file_name.clone());
+    AppMeta {
+        path: path.to_string_lossy().into_owned(),
+        name,
+        file_name,
+        size: md.as_ref().map(|m| m.len()).unwrap_or(0),
+        modified,
+        ..Default::default()
+    }
 }
 
 /// CPU brand string, e.g. "AMD Ryzen 7 5800X".

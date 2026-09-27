@@ -16,12 +16,12 @@ namespace Conduit.Gui;
 /// </summary>
 sealed class MainWindow : Window
 {
-    static readonly string[] Pages = ["overview", "sites", "activity", "ai", "turbowarp", "settings"];
+    static readonly string[] Pages = ["overview", "sites", "activity", "ai", "turbowarp", "help", "settings"];
     static readonly Dictionary<string, string> PageGlyph = new()
     {
         ["ai"] = "",
         ["overview"] = "", ["sites"] = "", ["activity"] = "",
-        ["turbowarp"] = "", ["settings"] = "",
+        ["help"] = "\uE897", ["turbowarp"] = "", ["settings"] = "",
     };
 
     JsonNode _snap;
@@ -57,6 +57,7 @@ sealed class MainWindow : Window
     ItemsControl? _cores;
     TextBlock? _gpuText;
     ProgressBar? _gpuBar;
+    TextBlock? _gpuMemText;
     Slider? _volume;
     ToggleButton? _mute;
     Button? _playPause;
@@ -218,7 +219,7 @@ sealed class MainWindow : Window
                 Icon = Ui.Icon(PageGlyph[p]),
                 Tag = p,
             };
-            (p == "settings" ? _nav.FooterMenuItems : _nav.MenuItems).Add(item);
+            (p == "settings" || p == "help" ? _nav.FooterMenuItems : _nav.MenuItems).Add(item);
             if (p == _page) _nav.SelectedItem = item;
         }
         Ui.ApplyTheme(this, App.Settings?["theme"]?.GetValue<string>());
@@ -248,6 +249,7 @@ sealed class MainWindow : Window
             "activity" => ActivityPage(),
             "ai" => AiPage(),
             "turbowarp" => TurboWarpPage(),
+            "help" => HelpPage(),
             "settings" => SettingsPage(),
             _ => OverviewPage(),
         };
@@ -328,6 +330,43 @@ sealed class MainWindow : Window
         return card;
     }
 
+    // --------------------------------------------------------------- help
+
+    /// Plain-language guide: what Conduit is, how pairing/consent work, what a
+    /// site can ask for (the live permission list), privacy, and updates.
+    FrameworkElement HelpPage()
+    {
+        var (scroll, col) = Column(Loc.T("nav_help"));
+        void Para(string key)
+        {
+            var t = Ui.Secondary(Loc.T(key), "BodyTextBlockStyle");
+            t.Margin = new Thickness(0, 0, 0, 8);
+            col.Children.Add(t);
+        }
+        Para("help_intro");
+
+        col.Children.Add(GroupHeader(Loc.T("help_pairing_t")));
+        Para("help_pairing_d");
+
+        col.Children.Add(GroupHeader(Loc.T("help_perms_t")));
+        foreach (var n in _snap["perms"] as JsonArray ?? [])
+        {
+            var p = n!.GetValue<string>();
+            col.Children.Add(Card("", Loc.T("perm_" + p), Loc.T("perm_" + p + "_d")));
+        }
+
+        col.Children.Add(GroupHeader(Loc.T("help_privacy_t")));
+        Para("help_privacy_d");
+
+        col.Children.Add(GroupHeader(Loc.T("help_updates_t")));
+        Para("help_updates_d");
+
+        var link = new Button { Content = Loc.T("help_more"), Margin = new Thickness(0, 16, 0, 0) };
+        link.Click += (_, _) => Core.Cmd("open_url", new JsonObject { ["url"] = "https://github.com/iamshasha/Conduit" });
+        col.Children.Add(link);
+        return scroll;
+    }
+
     // ------------------------------------------------------------ overview
 
     FrameworkElement OverviewPage()
@@ -390,8 +429,10 @@ sealed class MainWindow : Window
                 _gpuBar = new ProgressBar { Maximum = 100, Value = 0 };
                 box.Children.Add(_gpuBar);
                 var vram = g["vram"]?.GetValue<double>() ?? 0;
-                if (vram > 0)
-                    box.Children.Add(Ui.Secondary($"{Loc.T("vram")}: {Ui.Bytes(vram)}"));
+                // Live used / total VRAM (filled by Stats); falls back to the
+                // total when a live sample is not available.
+                _gpuMemText = Ui.Secondary(vram > 0 ? $"{Loc.T("vram")}: {Ui.Bytes(vram)}" : "");
+                box.Children.Add(_gpuMemText);
                 col.Children.Add(Ui.Card(box));
                 break; // primary adapter's live usage; extra adapters listed below
             }
@@ -525,6 +566,13 @@ sealed class MainWindow : Window
             {
                 _gpuBar.Value = g.GetValue<double>();
                 _gpuText!.Text = $"{g.GetValue<double>():0}%";
+            }
+            var mem = s["gpu_mem"];
+            if (mem is not null && _gpuMemText is not null)
+            {
+                var mu = mem["used"]?.GetValue<double>() ?? 0;
+                var mt = mem["total"]?.GetValue<double>() ?? 0;
+                if (mt > 0) _gpuMemText.Text = $"{Loc.T("vram")}: {Ui.Bytes(mu)} / {Ui.Bytes(mt)}";
             }
         }
 
@@ -969,6 +1017,17 @@ sealed class MainWindow : Window
     TextBlock? _aiSetupText;
     InfoBar? _aiRec;
     string _recModel = "";
+    // Setup progress controls (rebuilt with the page).
+    Button? _aiPause, _aiStop;
+    StackPanel? _aiProgress;
+    TextBox? _aiLogBox;
+    Expander? _aiLogExp;
+    // State that must survive a page rebuild (navigate away and back mid-setup).
+    bool _aiBusy;          // a setup job is in flight
+    bool _aiPaused;        // the job is paused
+    string _aiStageText = "";
+    double _aiPct = -1;    // -1 = indeterminate
+    readonly List<string> _aiLog = new();
 
     FrameworkElement AiPage()
     {
@@ -1001,18 +1060,64 @@ sealed class MainWindow : Window
         _aiSetup = new Button { Content = Loc.T("ai_setup"), Style = Ui.S("AccentButtonStyle") };
         _aiSetup.Click += (_, _) =>
         {
-            _aiSetup!.IsEnabled = false;
-            if (_aiSetupBar is not null) _aiSetupBar.Visibility = Visibility.Visible;
-            if (_aiSetupText is not null) { _aiSetupText.Visibility = Visibility.Visible; _aiSetupText.Text = Loc.T("ai_setup_checking"); }
+            // The core refuses a duplicate too, but never even fire a second
+            // request while one is in flight.
+            if (_aiBusy) return;
+            _aiBusy = true;
+            _aiPaused = false;
+            _aiPct = -1;
+            _aiStageText = Loc.T("ai_setup_checking");
+            _aiLog.Clear();
             var args = new JsonObject();
             if (_recModel != "") args["model"] = _recModel;
             Core.Cmd("ai_setup", args);
+            ApplyAiSetupState();
         };
-        _aiSetupBar = new ProgressBar { IsIndeterminate = true, Minimum = 0, Maximum = 100, Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
+
+        _aiSetupBar = new ProgressBar { IsIndeterminate = true, Minimum = 0, Maximum = 100, Margin = new Thickness(0, 8, 0, 0) };
         _aiSetupText = Ui.Secondary("");
-        _aiSetupText.Visibility = Visibility.Collapsed;
-        col.Children.Add(Card("", Loc.T("ai_setup"), Loc.T("ai_setup_hint"),
-            new StackPanel { Children = { _aiRec, _aiSetup, _aiSetupBar, _aiSetupText } }));
+
+        // Segoe Fluent glyphs (no emoji / third-party icons): Pause, Play, Cancel.
+        _aiPause = Ui.IconButton("", Loc.T("ai_pause"), (_, _) =>
+        {
+            if (!_aiBusy) return;
+            _aiPaused = !_aiPaused;
+            Core.Cmd(_aiPaused ? "ai_setup_pause" : "ai_setup_resume");
+            ApplyAiSetupState();
+        });
+        _aiStop = Ui.IconButton("", Loc.T("ai_stop"), (_, _) =>
+        {
+            if (!_aiBusy) return;
+            Core.Cmd("ai_setup_cancel");
+        });
+        var setupBtns = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
+        setupBtns.Children.Add(_aiPause);
+        setupBtns.Children.Add(_aiStop);
+
+        _aiLogBox = new TextBox
+        {
+            IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap,
+            IsSpellCheckEnabled = false, MinHeight = 120, MaxHeight = 200,
+            FontFamily = new FontFamily("Cascadia Mono, Consolas"),
+            Text = string.Join("\n", _aiLog),
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_aiLogBox, Loc.T("ai_setup_logs"));
+        _aiLogExp = new Expander
+        {
+            Header = Loc.T("ai_setup_logs"), Content = _aiLogBox,
+            HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+
+        // The recommendation banner and the setup button sit in the card; the
+        // progress + log panel spans the full width below it so nothing is
+        // squeezed into the narrow right column.
+        _aiSetup.HorizontalAlignment = HorizontalAlignment.Right;
+        col.Children.Add(Card("", Loc.T("ai_setup"), Loc.T("ai_setup_hint"), _aiSetup));
+        col.Children.Add(_aiRec);
+        _aiProgress = new StackPanel { Margin = new Thickness(0, 4, 0, 0), Children = { _aiSetupBar, _aiSetupText, setupBtns, _aiLogExp } };
+        col.Children.Add(_aiProgress);
+        ApplyAiSetupState();
 
         _aiModel = new ComboBox { MinWidth = 260, IsEnabled = false };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_aiModel, Loc.T("ai_model"));
@@ -1066,8 +1171,15 @@ sealed class MainWindow : Window
             : vram is > 0 ? $"{gpu} ({vram:0.#} GB)" : gpu;
         _aiRec.Severity = capable ? InfoBarSeverity.Success : InfoBarSeverity.Warning;
         _aiRec.Title = Loc.T("ai_recommend", ("device", device), ("model", _recModel));
-        _aiRec.Message = tier;
-        if (_aiSetup is not null) _aiSetup.Content = Loc.T("ai_setup_model", ("model", _recModel));
+        // If Ollama is already here, say so and set up reuses it (no reinstall).
+        var running = d["ollama_running"]?.GetValue<bool>() == true;
+        var installed = d["ollama_installed"]?.GetValue<bool>() == true;
+        var detected = running ? Loc.T("ai_ollama_running") : installed ? Loc.T("ai_ollama_installed") : null;
+        _aiRec.Message = detected is null ? tier : $"{tier}\n{detected}";
+        if (_aiSetup is not null)
+            _aiSetup.Content = installed
+                ? Loc.T("ai_setup_model_have", ("model", _recModel))
+                : Loc.T("ai_setup_model", ("model", _recModel));
     }
 
     public void ShowAiStatus(JsonNode d)
@@ -1095,49 +1207,116 @@ sealed class MainWindow : Window
             _aiModel.IsEnabled = models.Count > 0;
         }
         if (_aiRun is not null) _aiRun.IsEnabled = models.Count > 0;
-        // A status refresh follows a completed setup; restore the button and
-        // hide the progress row.
-        if (_aiSetup is not null) _aiSetup.IsEnabled = true;
-        if (online)
+        // The setup button / progress / log are owned by ApplyAiSetupState (a
+        // status refresh also follows a completed setup); reapply so an
+        // in-flight job isn't re-enabled here.
+        ApplyAiSetupState();
+    }
+
+    /// Push the persisted setup state onto the controls. Called after every
+    /// state change and on page rebuild, so navigating away and back mid-setup
+    /// restores the button/progress/log exactly.
+    void ApplyAiSetupState()
+    {
+        var hasLog = _aiLog.Count > 0;
+        if (_aiSetup is not null) _aiSetup.IsEnabled = !_aiBusy;
+        if (_aiProgress is not null)
+            _aiProgress.Visibility = _aiBusy || hasLog || !string.IsNullOrEmpty(_aiStageText)
+                ? Visibility.Visible : Visibility.Collapsed;
+        if (_aiSetupBar is not null)
         {
-            if (_aiSetupBar is not null) _aiSetupBar.Visibility = Visibility.Collapsed;
-            if (_aiSetupText is not null) _aiSetupText.Visibility = Visibility.Collapsed;
+            _aiSetupBar.Visibility = _aiBusy ? Visibility.Visible : Visibility.Collapsed;
+            if (_aiPct < 0) _aiSetupBar.IsIndeterminate = true;
+            else { _aiSetupBar.IsIndeterminate = false; _aiSetupBar.Value = Math.Clamp(_aiPct, 0, 100); }
+        }
+        if (_aiSetupText is not null)
+        {
+            _aiSetupText.Text = _aiStageText;
+            _aiSetupText.Visibility = string.IsNullOrEmpty(_aiStageText) ? Visibility.Collapsed : Visibility.Visible;
+        }
+        if (_aiPause is not null)
+        {
+            _aiPause.Visibility = _aiBusy ? Visibility.Visible : Visibility.Collapsed;
+            var lbl = Loc.T(_aiPaused ? "ai_resume" : "ai_pause");
+            var content = (StackPanel)_aiPause.Content;
+            ((FontIcon)content.Children[0]).Glyph = _aiPaused ? "" : ""; // Play / Pause
+            ((TextBlock)content.Children[1]).Text = lbl;
+            ToolTipService.SetToolTip(_aiPause, lbl);
+        }
+        if (_aiStop is not null) _aiStop.Visibility = _aiBusy ? Visibility.Visible : Visibility.Collapsed;
+        if (_aiLogExp is not null) _aiLogExp.Visibility = hasLog ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    void AppendAiLog(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return;
+        _aiLog.Add(line);
+        // Bound the buffer so a very long pull can't grow it without limit.
+        if (_aiLog.Count > 500) _aiLog.RemoveRange(0, _aiLog.Count - 500);
+        if (_page == "ai" && _aiLogBox is not null)
+        {
+            _aiLogBox.Text = string.Join("\n", _aiLog);
+            _aiLogBox.Select(_aiLogBox.Text.Length, 0); // keep the tail in view
         }
     }
 
-    /// Progress from the one-key AI setup (download → install → pull → error).
+    /// Progress from the one-key AI setup. Stages: download / install / starting
+    /// / pull / paused / resumed / done / cancelled / error, plus streamed log
+    /// lines. State is stored in fields so it survives a page rebuild.
     public void ShowAiSetup(JsonNode d)
     {
-        if (_page != "ai" || _aiSetupBar is null || _aiSetupText is null) return;
         var stage = d["stage"]?.GetValue<string>() ?? "";
-        _aiSetupBar.Visibility = Visibility.Visible;
-        _aiSetupText.Visibility = Visibility.Visible;
         switch (stage)
         {
+            case "log":
+                AppendAiLog(d["line"]?.GetValue<string>() ?? "");
+                return; // log only; no control state to reapply
+            case "paused":
+                _aiPaused = true;
+                _aiStageText = Loc.T("ai_setup_paused");
+                break;
+            case "resumed":
+                _aiPaused = false;
+                break;
             case "download":
-                _aiSetupBar.IsIndeterminate = false;
-                _aiSetupBar.Value = d["pct"]?.GetValue<double>() ?? 0;
-                _aiSetupText.Text = Loc.T("ai_setup_downloading", ("pct", (int)(d["pct"]?.GetValue<double>() ?? 0)));
+                _aiPaused = false;
+                _aiPct = d["pct"]?.GetValue<double>() ?? 0;
+                var done = d["done"]?.GetValue<double>() ?? 0;
+                var total = d["total"]?.GetValue<double>() ?? 0;
+                _aiStageText = total > 0
+                    ? Loc.T("ai_setup_downloading_size", ("pct", (int)_aiPct), ("done", Ui.Bytes(done)), ("total", Ui.Bytes(total)))
+                    : Loc.T("ai_setup_downloading", ("pct", (int)_aiPct));
                 break;
             case "install":
-                _aiSetupBar.IsIndeterminate = true;
-                _aiSetupText.Text = Loc.T("ai_setup_installing");
+                _aiPct = -1;
+                _aiStageText = Loc.T("ai_setup_installing");
                 break;
             case "starting":
-                _aiSetupBar.IsIndeterminate = true;
-                _aiSetupText.Text = Loc.T("ai_setup_starting");
+                _aiPct = -1;
+                _aiStageText = Loc.T("ai_setup_starting");
                 break;
             case "pull":
-                _aiSetupBar.IsIndeterminate = false;
-                _aiSetupBar.Value = d["pct"]?.GetValue<double>() ?? 0;
-                _aiSetupText.Text = Loc.T("ai_setup_pulling", ("pct", (int)(d["pct"]?.GetValue<double>() ?? 0)));
+                _aiPaused = false;
+                _aiPct = d["pct"]?.GetValue<double>() ?? 0;
+                _aiStageText = Loc.T("ai_setup_pulling", ("pct", (int)_aiPct));
+                break;
+            case "done":
+                _aiBusy = false; _aiPaused = false; _aiPct = -1;
+                _aiStageText = Loc.T("ai_setup_done");
+                AppendAiLog(_aiStageText);
+                break;
+            case "cancelled":
+                _aiBusy = false; _aiPaused = false; _aiPct = -1;
+                _aiStageText = Loc.T("ai_setup_stopped");
+                AppendAiLog(_aiStageText);
                 break;
             case "error":
-                _aiSetupBar.Visibility = Visibility.Collapsed;
-                _aiSetupText.Text = Loc.T("ai_setup_failed", ("reason", d["error"]?.GetValue<string>() ?? ""));
-                if (_aiSetup is not null) _aiSetup.IsEnabled = true;
+                _aiBusy = false; _aiPaused = false; _aiPct = -1;
+                _aiStageText = Loc.T("ai_setup_failed", ("reason", d["error"]?.GetValue<string>() ?? ""));
+                AppendAiLog(_aiStageText);
                 break;
         }
+        if (_page == "ai") ApplyAiSetupState();
     }
 
     public void ShowAiResult(JsonNode d)
@@ -1255,6 +1434,19 @@ sealed class MainWindow : Window
             Loc.T("storage_used", ("size", Ui.Bytes(used)), ("files", files)), clearAll));
         col.Children.Add(Card("", Loc.T("clear_cache"), $"{Loc.T("clear_cache_desc")}\n{Ui.Bytes(cache)}",
             Ui.IconButton("", Loc.T("clear_cache"), (_, _) => Core.Cmd("clear_cache"))));
+        // Local AI (Ollama) storage: filled on demand by ShowAiStorage so the
+        // directory scan never runs on every snapshot.
+        _aiStoragePanel = new StackPanel { Spacing = 6 };
+        _aiStoragePanel.Children.Add(Ui.Secondary(Loc.T("ai_storage_loading")));
+        var aiStorageExp = new Expander
+        {
+            Header = Loc.T("ai_storage_title"), Content = _aiStoragePanel,
+            HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        col.Children.Add(aiStorageExp);
+        Core.Cmd("ai_storage");
+
         col.Children.Add(new Border { Height = 20 });
 
         // Icon-only action; the row already says what it does.
@@ -1267,8 +1459,12 @@ sealed class MainWindow : Window
         col.Children.Add(GroupHeader(Loc.T("about")));
         _updateInfo = new InfoBar { IsClosable = false, Margin = new Thickness(0, 0, 0, 8), Visibility = Visibility.Collapsed };
         col.Children.Add(_updateInfo);
-        var check = Ui.IconButton("", Loc.T("check_updates"), (_, _) =>
+        _checkUpdate = Ui.IconButton("", Loc.T("check_updates"), (_, _) =>
         {
+            // Don't stack checks or interrupt an install already running.
+            if (_updateBusy) return;
+            _updateBusy = true;
+            if (_checkUpdate is not null) _checkUpdate.IsEnabled = false;
             if (_updateInfo is not null)
             {
                 _updateInfo.Visibility = Visibility.Visible;
@@ -1280,7 +1476,7 @@ sealed class MainWindow : Window
             }
             Core.Cmd("check_updates");
         });
-        col.Children.Add(Card("", "Conduit", _snap["version"]?.GetValue<string>(), check));
+        col.Children.Add(Card("", "Conduit", _snap["version"]?.GetValue<string>(), _checkUpdate));
 
         col.Children.Add(Card("", Loc.T("quit"), null,
             Ui.With(new Button { Content = Loc.T("quit") }, b => b.Click += (_, _) => Core.Cmd("quit"))));
@@ -1288,6 +1484,9 @@ sealed class MainWindow : Window
     }
 
     InfoBar? _updateInfo;
+    Button? _checkUpdate;
+    bool _updateBusy;
+    StackPanel? _aiStoragePanel;
     FilesWindow? _files;
 
     public void ShowBrowse(JsonNode d)
@@ -1306,9 +1505,93 @@ sealed class MainWindow : Window
         Ui.Bring(_files);
     }
 
+    /// Fill the Settings → Storage "Local AI" panel with Ollama's models and
+    /// sizes (requested on demand when the Settings page opens).
+    public void ShowAiStorage(JsonNode d)
+    {
+        if (_page != "settings" || _aiStoragePanel is null) return;
+        _aiStoragePanel.Children.Clear();
+        if (d["installed"]?.GetValue<bool>() != true)
+        {
+            _aiStoragePanel.Children.Add(Ui.Secondary(Loc.T("ai_storage_none")));
+            return;
+        }
+        var models = d["models"] as JsonArray ?? new();
+        var modelsSize = d["models_size"]?.GetValue<double>() ?? 0;
+        var diskSize = d["disk_size"]?.GetValue<double>() ?? 0;
+
+        // The app itself, listed and deletable separately from the models.
+        var app = d["app"];
+        if (app is not null)
+        {
+            _aiStoragePanel.Children.Add(new TextBlock
+            {
+                Text = Loc.T("ai_app_title"),
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            _aiStoragePanel.Children.Add(StorageRow(
+                app["name"]?.GetValue<string>() ?? "Ollama",
+                app["size"]?.GetValue<double>() ?? 0,
+                Loc.T("ai_uninstall"),
+                async () =>
+                {
+                    if (await Confirm(Loc.T("ai_uninstall"), Loc.T("ai_uninstall_confirm"), Loc.T("ai_uninstall")))
+                        Core.Cmd("ai_uninstall");
+                }));
+        }
+
+        _aiStoragePanel.Children.Add(new TextBlock
+        {
+            Text = Loc.T("ai_storage_models", ("n", models.Count), ("size", Ui.Bytes(modelsSize > 0 ? modelsSize : diskSize))),
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Margin = new Thickness(0, app is not null ? 8 : 0, 0, 0),
+        });
+        if (models.Count == 0)
+            _aiStoragePanel.Children.Add(Ui.Secondary(Loc.T("ai_no_models")));
+        foreach (var m in models)
+        {
+            var name = m!["name"]?.GetValue<string>() ?? "";
+            _aiStoragePanel.Children.Add(StorageRow(
+                name,
+                m["size"]?.GetValue<double>() ?? 0,
+                Loc.T("delete"),
+                async () =>
+                {
+                    if (await Confirm(Loc.T("delete"), Loc.T("ai_delete_confirm", ("model", name)), Loc.T("delete")))
+                        Core.Cmd("ai_delete_model", new JsonObject { ["name"] = name });
+                }));
+        }
+    }
+
+    /// One "name … size [Delete]" row used by both the app and each model.
+    Grid StorageRow(string name, double size, string action, Func<System.Threading.Tasks.Task> onDelete)
+    {
+        var row = new Grid { ColumnSpacing = 12, Margin = new Thickness(0, 2, 0, 2) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.Children.Add(new TextBlock
+        {
+            Text = name, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap,
+        });
+        var sz = Ui.Secondary(Ui.Bytes(size));
+        sz.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(sz, 1);
+        row.Children.Add(sz);
+        var del = new Button { Content = action };
+        Grid.SetColumn(del, 2);
+        del.Click += async (_, _) => await onDelete();
+        row.Children.Add(del);
+        return row;
+    }
+
     public void ShowUpdate(JsonNode d)
     {
         if (_page != "settings" || _updateInfo is null) return;
+        // A check finished: the button is free again (install re-locks it).
+        _updateBusy = false;
+        if (_checkUpdate is not null) _checkUpdate.IsEnabled = true;
         _updateInfo.Visibility = Visibility.Visible;
         _updateInfo.IsOpen = true;
         _updateInfo.ActionButton = null;
@@ -1352,6 +1635,9 @@ sealed class MainWindow : Window
     void BeginInstall()
     {
         if (_updateInfo is null) return;
+        // Lock the check button for the duration of the install.
+        _updateBusy = true;
+        if (_checkUpdate is not null) _checkUpdate.IsEnabled = false;
         _updateInfo.ActionButton = null;
         _updateInfo.Severity = InfoBarSeverity.Informational;
         _updateInfo.Title = Loc.T("update_downloading");
@@ -1373,6 +1659,8 @@ sealed class MainWindow : Window
     public void UpdateError(string reason)
     {
         if (_updateInfo is null) return;
+        _updateBusy = false;
+        if (_checkUpdate is not null) _checkUpdate.IsEnabled = true;
         _updateInfo.Content = null;
         _updateBar = null;
         _updateInfo.Severity = InfoBarSeverity.Warning;

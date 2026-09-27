@@ -9,6 +9,124 @@ fn wide(s: &str) -> Vec<u16> {
     std::ffi::OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
 
+/// Force-close every process (except this one) that holds a file open under
+/// `dir`, via the Windows Restart Manager. Used right before a self-update so no
+/// leftover GUI, shell, antivirus scan or preview handler keeps the install
+/// folder locked and blocks Velopack's swap. Best-effort; returns how many it
+/// terminated.
+pub fn force_close_lockers(dir: &std::path::Path) -> u32 {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::RestartManager::{
+        RmEndSession, RmGetList, RmRegisterResources, RmStartSession, RM_PROCESS_INFO,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+
+    // Collect files under the install dir (bounded), so the Restart Manager can
+    // report which processes hold any of them open.
+    fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        if out.len() > 500 {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(dir, &mut files);
+    if files.is_empty() {
+        return 0;
+    }
+    let wides: Vec<Vec<u16>> = files.iter().map(|p| wide(&p.to_string_lossy())).collect();
+    let ptrs: Vec<*const u16> = wides.iter().map(|w| w.as_ptr()).collect();
+
+    unsafe {
+        let mut session: u32 = 0;
+        let mut key = [0u16; 33]; // CCH_RM_SESSION_KEY (32) + 1
+        if RmStartSession(&mut session, 0, key.as_mut_ptr()) != 0 {
+            return 0;
+        }
+        let mut killed = 0u32;
+        if RmRegisterResources(session, ptrs.len() as u32, ptrs.as_ptr(), 0, std::ptr::null(), 0, std::ptr::null()) == 0 {
+            let (mut needed, mut count, mut reason) = (0u32, 0u32, 0u32);
+            // First call sizes the buffer (expects ERROR_MORE_DATA).
+            RmGetList(session, &mut needed, &mut count, std::ptr::null_mut(), &mut reason);
+            if needed > 0 {
+                let mut infos = vec![std::mem::zeroed::<RM_PROCESS_INFO>(); needed as usize];
+                count = needed;
+                if RmGetList(session, &mut needed, &mut count, infos.as_mut_ptr(), &mut reason) == 0 {
+                    let self_pid = GetCurrentProcessId();
+                    for info in infos.iter().take(count as usize) {
+                        let pid = info.Process.dwProcessId;
+                        if pid == 0 || pid == self_pid {
+                            continue;
+                        }
+                        let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+                        if !h.is_null() {
+                            if TerminateProcess(h, 0) != 0 {
+                                killed += 1;
+                            }
+                            CloseHandle(h);
+                        }
+                    }
+                }
+            }
+        }
+        RmEndSession(session);
+        killed
+    }
+}
+
+/// A single, long-lived MTA-initialised thread that every COM / WinRT call runs
+/// on. The stats tick fires these from arbitrary tokio blocking threads; doing
+/// COM there meant re-initialising COM per call on threads with inconsistent
+/// apartment state, and creating/releasing audio (IAudioEndpointVolume) and
+/// media objects across apartments — which crashed inside AudioSes/RPC with an
+/// access violation. Pinning all COM to one apartment, serialised, removes that.
+mod com {
+    use std::sync::{mpsc, OnceLock};
+
+    type Job = Box<dyn FnOnce() + Send>;
+
+    fn sender() -> &'static mpsc::Sender<Job> {
+        static TX: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
+        TX.get_or_init(|| {
+            let (tx, rx) = mpsc::channel::<Job>();
+            std::thread::Builder::new()
+                .name("conduit-com".into())
+                .spawn(move || {
+                    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+                    // Initialise the apartment once, for the life of the process.
+                    unsafe {
+                        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                    }
+                    while let Ok(job) = rx.recv() {
+                        job();
+                    }
+                })
+                .expect("spawn com thread");
+            tx
+        })
+    }
+
+    /// Run `f` on the COM apartment thread and block for its result. `f` and its
+    /// return value cross threads, but any COM objects it makes live and die
+    /// entirely inside `f` on that one thread.
+    pub fn run<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (rtx, rrx) = mpsc::channel();
+        let job: Job = Box::new(move || {
+            let _ = rtx.send(f());
+        });
+        sender().send(job).expect("com thread alive");
+        rrx.recv().expect("com thread returned")
+    }
+}
+
 // ---------------------------------------------------------------- elevation
 
 pub fn is_elevated() -> bool {
@@ -100,28 +218,28 @@ pub fn media_key(key: &str, times: u32) -> Result<(), String> {
 
 /// Runs `f` with the default playback device's volume control. Core Audio is
 /// COM, so this initialises COM on the calling (blocking) thread.
-fn with_endpoint<T>(
-    f: impl FnOnce(&windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume) -> windows::core::Result<T>,
+fn with_endpoint<T: Send + 'static>(
+    f: impl FnOnce(&windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume) -> windows::core::Result<T> + Send + 'static,
 ) -> Result<T, String> {
-    use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-    use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
-    unsafe {
-        // S_FALSE / RPC_E_CHANGED_MODE just mean COM is already up on this thread.
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    // All Core Audio COM work runs on the one apartment thread; the objects are
+    // created, used and released there and never touched from another thread.
+    com::run(move || {
+        use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+        use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
         let run = || -> windows::core::Result<T> {
-            let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-            let dev = en.GetDefaultAudioEndpoint(eRender, eConsole)?;
-            let vol: IAudioEndpointVolume = dev.Activate(CLSCTX_ALL, None)?;
+            let en: IMMDeviceEnumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }?;
+            let dev = unsafe { en.GetDefaultAudioEndpoint(eRender, eConsole) }?;
+            let vol: IAudioEndpointVolume = unsafe { dev.Activate(CLSCTX_ALL, None) }?;
             f(&vol)
         };
         run().map_err(|e| format!("audio device: {e}"))
-    }
+    })
 }
 
 /// (level 0–100, muted)
 pub fn volume_get() -> Result<(u32, bool), String> {
-    with_endpoint(|v| unsafe {
+    with_endpoint(move |v| unsafe {
         let level = v.GetMasterVolumeLevelScalar()?;
         let muted = v.GetMute()?.as_bool();
         Ok(((level * 100.0).round() as u32, muted))
@@ -129,7 +247,7 @@ pub fn volume_get() -> Result<(u32, bool), String> {
 }
 
 pub fn volume_set(level: Option<u32>, muted: Option<bool>) -> Result<(u32, bool), String> {
-    with_endpoint(|v| unsafe {
+    with_endpoint(move |v| unsafe {
         if let Some(l) = level {
             v.SetMasterVolumeLevelScalar(l.min(100) as f32 / 100.0, std::ptr::null())?;
         }
@@ -151,6 +269,10 @@ fn media_session() -> windows::core::Result<Option<windows::Media::Control::Glob
 
 /// The session Windows shows in its media flyout, if any.
 pub fn now_playing() -> Result<Option<NowPlaying>, String> {
+    com::run(now_playing_inner)
+}
+
+fn now_playing_inner() -> Result<Option<NowPlaying>, String> {
     let run = || -> windows::core::Result<Option<NowPlaying>> {
         let Some(s) = media_session()? else { return Ok(None) };
         let props = s.TryGetMediaPropertiesAsync()?.join()?;
@@ -177,6 +299,11 @@ pub fn now_playing() -> Result<Option<NowPlaying>, String> {
 /// Control the current session directly (works even when media keys are
 /// grabbed by another app). Returns whether the app accepted the command.
 pub fn media_control(action: &str) -> Result<bool, String> {
+    let action = action.to_string();
+    com::run(move || media_control_inner(&action))
+}
+
+fn media_control_inner(action: &str) -> Result<bool, String> {
     let run = || -> windows::core::Result<Option<bool>> {
         let Some(s) = media_session()? else { return Ok(None) };
         let op = match action {
@@ -271,6 +398,39 @@ pub fn gpu_usage(ms: u32) -> Option<f64> {
         }
         PdhCloseQuery(query);
         Some(total.clamp(0.0, 100.0))
+    }
+}
+
+/// Live video-memory use of the primary adapter: (bytes in use, dedicated VRAM).
+/// Uses DXGI's QueryVideoMemoryInfo (the local memory segment). None if the
+/// adapter doesn't support it.
+pub fn gpu_memory() -> Option<(u64, u64)> {
+    use windows::core::Interface; // brings `.cast::<T>()` into scope
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+        DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO,
+    };
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        let mut best: Option<(u64, u64)> = None;
+        let mut i = 0u32;
+        while let Ok(adapter) = factory.EnumAdapters1(i) {
+            i += 1;
+            let Ok(d) = adapter.GetDesc1() else { continue };
+            if d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
+                continue;
+            }
+            let Ok(a3) = adapter.cast::<IDXGIAdapter3>() else { continue };
+            let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+            if a3.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info).is_ok() {
+                let total = d.DedicatedVideoMemory as u64;
+                // Match gpu_usage: report the adapter with the most VRAM.
+                if best.as_ref().map_or(true, |(_, t)| total > *t) {
+                    best = Some((info.CurrentUsage, total));
+                }
+            }
+        }
+        best
     }
 }
 
@@ -416,4 +576,183 @@ pub fn attach_parent_console() {
         use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
         AttachConsole(ATTACH_PARENT_PROCESS);
     }
+}
+
+// -------------------------------------------------------------- app metadata
+
+/// Full metadata for an executable: its version-resource strings plus its icon
+/// rendered to PNG. Every step degrades gracefully — a file with no version
+/// block or no icon still returns the filesystem basics.
+pub fn app_meta(path: &std::path::Path) -> super::AppMeta {
+    let mut m = super::basic_meta(path);
+    let wpath = wide(&m.path);
+    if let Some(v) = read_version_strings(&wpath) {
+        // Prefer a human product/description name over the bare file stem.
+        if let Some(n) = v.product.or(v.description.clone()) {
+            if !n.trim().is_empty() {
+                m.name = n;
+            }
+        }
+        m.version = v.version.filter(|s| !s.trim().is_empty());
+        m.publisher = v.company.filter(|s| !s.trim().is_empty());
+        m.description = v.description.filter(|s| !s.trim().is_empty());
+    }
+    m.icon_png = extract_icon_png(&wpath);
+    m
+}
+
+#[derive(Default)]
+struct VersionStrings {
+    product: Option<String>,
+    company: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+}
+
+/// Read the file's version resource. Queries the file's own language/codepage
+/// first, then falls back to US-English so localized builds still resolve.
+fn read_version_strings(wpath: &[u16]) -> Option<VersionStrings> {
+    use windows_sys::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+    unsafe {
+        let mut handle = 0u32;
+        let size = GetFileVersionInfoSizeW(wpath.as_ptr(), &mut handle);
+        if size == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; size as usize];
+        if GetFileVersionInfoW(wpath.as_ptr(), 0, size, buf.as_mut_ptr() as *mut _) == 0 {
+            return None;
+        }
+        let block = buf.as_ptr() as *const core::ffi::c_void;
+
+        // Figure out which language/codepage table this file actually carries.
+        let mut lang_cp = String::from("040904B0");
+        let trans = wide("\\VarFileInfo\\Translation");
+        let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut len = 0u32;
+        if VerQueryValueW(block, trans.as_ptr(), &mut ptr, &mut len) != 0 && len >= 4 && !ptr.is_null() {
+            let words = std::slice::from_raw_parts(ptr as *const u16, 2);
+            lang_cp = format!("{:04X}{:04X}", words[0], words[1]);
+        }
+
+        let query = |field: &str| -> Option<String> {
+            for lc in [lang_cp.as_str(), "040904B0", "040904E4", "000004B0"] {
+                let sub = wide(&format!("\\StringFileInfo\\{lc}\\{field}"));
+                let mut p: *mut core::ffi::c_void = std::ptr::null_mut();
+                let mut l = 0u32;
+                if VerQueryValueW(block, sub.as_ptr(), &mut p, &mut l) != 0 && l > 0 && !p.is_null() {
+                    // `l` counts characters including the trailing NUL.
+                    let chars = std::slice::from_raw_parts(p as *const u16, l as usize);
+                    let end = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
+                    let s = String::from_utf16_lossy(&chars[..end]);
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
+                }
+            }
+            None
+        };
+
+        Some(VersionStrings {
+            product: query("ProductName"),
+            company: query("CompanyName"),
+            description: query("FileDescription"),
+            version: query("ProductVersion").or_else(|| query("FileVersion")),
+        })
+    }
+}
+
+/// Extract the file's icon at the largest size Windows will give us and encode
+/// it as PNG (RGBA). Returns None if the file has no icon or any step fails.
+fn extract_icon_png(wpath: &[u16]) -> Option<Vec<u8>> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, PrivateExtractIconsW, HICON};
+    unsafe {
+        let mut hicon: HICON = std::ptr::null_mut();
+        let mut icon_id = 0u32;
+        for size in [256i32, 48, 32] {
+            let n = PrivateExtractIconsW(wpath.as_ptr(), 0, size, size, &mut hicon, &mut icon_id, 1, 0);
+            if n > 0 && !hicon.is_null() {
+                break;
+            }
+            hicon = std::ptr::null_mut();
+        }
+        if hicon.is_null() {
+            return None;
+        }
+        let png = hicon_to_png(hicon);
+        DestroyIcon(hicon);
+        png
+    }
+}
+
+/// Rasterize an HICON's colour bitmap to 32-bit RGBA and PNG-encode it.
+unsafe fn hicon_to_png(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, DIB_RGB_COLORS,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
+
+    let mut ii: ICONINFO = std::mem::zeroed();
+    if GetIconInfo(hicon, &mut ii) == 0 {
+        return None;
+    }
+    // Free the bitmaps GetIconInfo handed us however we exit.
+    let color = ii.hbmColor;
+    let mask = ii.hbmMask;
+    let cleanup = || {
+        if !color.is_null() {
+            DeleteObject(color as _);
+        }
+        if !mask.is_null() {
+            DeleteObject(mask as _);
+        }
+    };
+
+    let mut bm: BITMAP = std::mem::zeroed();
+    if color.is_null() || GetObjectW(color as _, std::mem::size_of::<BITMAP>() as i32, &mut bm as *mut _ as *mut _) == 0 {
+        cleanup();
+        return None;
+    }
+    let (w, h) = (bm.bmWidth, bm.bmHeight);
+    if w <= 0 || h <= 0 || w > 1024 || h > 1024 {
+        cleanup();
+        return None;
+    }
+
+    // Ask GDI for the pixels as top-down 32-bit BGRA.
+    let mut bmi: BITMAPINFO = std::mem::zeroed();
+    bmi.bmiHeader.biSize = std::mem::size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = w;
+    bmi.bmiHeader.biHeight = -h; // negative => top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = 0; // BI_RGB
+
+    let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
+    let hdc = GetDC(std::ptr::null_mut());
+    let got = GetDIBits(hdc, color as _, 0, h as u32, pixels.as_mut_ptr() as *mut _, &mut bmi, DIB_RGB_COLORS);
+    ReleaseDC(std::ptr::null_mut(), hdc);
+    cleanup();
+    if got == 0 {
+        return None;
+    }
+
+    // BGRA -> RGBA. If the icon carried no alpha at all, treat it as opaque.
+    let any_alpha = pixels.chunks_exact(4).any(|p| p[3] != 0);
+    for px in pixels.chunks_exact_mut(4) {
+        px.swap(0, 2);
+        if !any_alpha {
+            px[3] = 255;
+        }
+    }
+
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, w as u32, h as u32);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().ok()?;
+        writer.write_image_data(&pixels).ok()?;
+    }
+    Some(out)
 }

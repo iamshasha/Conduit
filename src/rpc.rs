@@ -108,8 +108,11 @@ async fn dispatch_inner(ctx: &Ctx, method: &str, params: &Value) -> R {
         }
         "app.list" => {
             need(ctx, "launch")?;
-            Ok(json!({"allowed": ctx.state.cfg.launch_allow
-                .iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>()}))
+            app_list(ctx)
+        }
+        "app.info" => {
+            need(ctx, "launch")?;
+            app_info(ctx, params).await
         }
         "app.launch" => {
             need(ctx, "launch")?;
@@ -471,7 +474,16 @@ async fn dispatch_inner(ctx: &Ctx, method: &str, params: &Value) -> R {
                 .map(|(c, r)| json!({"command": c, "risk": r,
                     "needs_consent": r >= crate::shell::CONSENT_THRESHOLD}))
                 .collect();
-            Ok(json!({"commands": list, "threshold": crate::shell::CONSENT_THRESHOLD}))
+            Ok(json!({"commands": list, "threshold": crate::shell::CONSENT_THRESHOLD,
+                      "available": crate::shell::available()}))
+        }
+        "shell.assess" => {
+            need(ctx, "shell")?;
+            shell_assess(ctx, params)
+        }
+        "net.fetch" => {
+            need(ctx, "net")?;
+            net_fetch(ctx, params).await
         }
         "shell.run" => {
             need(ctx, "shell")?;
@@ -650,26 +662,53 @@ fn folder_root(ctx: &Ctx, params: &Value) -> Result<(crate::state::FolderGrant, 
 }
 
 /// Run an allow-listed PowerShell cmdlet. Risky ones ask for consent first.
-async fn shell_run(ctx: &Ctx, params: &Value) -> R {
-    let command = s(params, "command")?;
-    let args: Vec<String> = params
+fn shell_args(params: &Value) -> Vec<String> {
+    params
         .get("args")
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-    let (cmdlet, risk, args) = crate::shell::validate(command, &args).map_err(|e| err("denied", e))?;
+        .unwrap_or_default()
+}
+
+/// Dry-run the risk classifier without executing: lets a page show the user the
+/// score and the reasons before it ever asks to run the command.
+fn shell_assess(_ctx: &Ctx, params: &Value) -> R {
+    let command = s(params, "command")?;
+    let args = shell_args(params);
+    let a = crate::shell::classify(command, &args).map_err(|e| err("denied", e))?;
+    let shown = if a.args.is_empty() { a.cmdlet.to_string() } else { format!("{} {}", a.cmdlet, a.args.join(" ")) };
+    Ok(json!({
+        "command": a.cmdlet,
+        "base_risk": a.base_risk,
+        "risk": a.risk,
+        "needs_consent": a.needs_consent(),
+        "reasons": a.reasons,
+        "preview": shown,
+        "available": crate::shell::available(),
+    }))
+}
+
+async fn shell_run(ctx: &Ctx, params: &Value) -> R {
+    let command = s(params, "command")?;
+    let args = shell_args(params);
+    let assessed = crate::shell::classify(command, &args).map_err(|e| err("denied", e))?;
+    let cmdlet = assessed.cmdlet;
+    let risk = assessed.risk;
+    let args = assessed.args;
+    let reasons = assessed.reasons;
 
     // A light rate limit so a page can't spin up shells in a loop.
     if !ctx.state.throttle(&format!("shell:{}", ctx.origin), Duration::from_millis(500)) {
         return Err(err("rate_limited", "one shell command every 0.5 s"));
     }
 
-    // Show the exact command that will run in the prompt.
+    // Show the exact command that will run in the prompt, with why it's flagged.
     let shown = if args.is_empty() { cmdlet.to_string() } else { format!("{cmdlet} {}", args.join(" ")) };
     if risk >= crate::shell::CONSENT_THRESHOLD {
+        let detail = if reasons.is_empty() { shown.clone() } else { format!("{shown}\n\n{}", reasons.join("; ")) };
         let a = ctx
             .state
-            .confirm("shell", &ctx.origin, shown.clone(), json!({"command": cmdlet, "risk": risk}), vec![], false)
+            .confirm("shell", &ctx.origin, detail, json!({"command": cmdlet, "risk": risk, "reasons": reasons}), vec![], false)
             .await;
         if !a.allow {
             return Err(err("denied", "the command was refused"));
@@ -678,8 +717,74 @@ async fn shell_run(ctx: &Ctx, params: &Value) -> R {
 
     let cmdlet_owned = cmdlet.to_string();
     let out = blocking(move || crate::shell::run(&cmdlet_owned, &args)).await?;
-    Ok(json!({"command": cmdlet, "risk": risk, "exit_code": out.exit_code,
+    Ok(json!({"command": cmdlet, "risk": risk, "reasons": reasons, "exit_code": out.exit_code,
               "output": out.text, "truncated": out.truncated}))
+}
+
+// ------------------------------------------------------------------ net proxy
+
+async fn net_fetch(ctx: &Ctx, params: &Value) -> R {
+    let url = s(params, "url")?.to_string();
+    let method = params
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("GET")
+        .to_ascii_uppercase();
+    if !crate::net::METHODS.contains(&method.as_str()) {
+        return Err(err("bad_params", format!("unsupported method {method:?}")));
+    }
+
+    // Caller-supplied headers, minus the ones the transport must own.
+    let mut headers: Vec<(String, String)> = Vec::new();
+    if let Some(obj) = params.get("headers").and_then(Value::as_object) {
+        if obj.len() > 50 {
+            return Err(err("bad_params", "too many headers"));
+        }
+        for (k, v) in obj {
+            let val = v.as_str().ok_or_else(|| err("bad_params", "header values must be strings"))?;
+            if k.is_empty() || k.len() > 256 || val.len() > 8192 || val.chars().any(|c| c.is_control()) {
+                return Err(err("bad_params", format!("illegal header {k:?}")));
+            }
+            if crate::net::header_allowed(k) {
+                headers.push((k.clone(), val.to_string()));
+            }
+        }
+    }
+
+    // Optional request body (utf8 text or base64).
+    let body = match params.get("body").and_then(Value::as_str) {
+        Some(raw) => {
+            let bytes = match params.get("bodyEncoding").and_then(Value::as_str).unwrap_or("utf8") {
+                "base64" => base64::engine::general_purpose::STANDARD
+                    .decode(raw)
+                    .map_err(|e| err("bad_params", format!("bad base64 body: {e}")))?,
+                _ => raw.as_bytes().to_vec(),
+            };
+            if bytes.len() > crate::net::MAX_REQ_BODY {
+                return Err(err("too_large", "request body exceeds the limit"));
+            }
+            Some(bytes)
+        }
+        None => None,
+    };
+
+    let response_type = params
+        .get("responseType")
+        .and_then(Value::as_str)
+        .unwrap_or("auto")
+        .to_string();
+
+    // A light rate limit: a proxy shouldn't become a flood/scan amplifier.
+    if !ctx.state.throttle(&format!("net:{}", ctx.origin), Duration::from_millis(50)) {
+        return Err(err("rate_limited", "too many requests; slow down"));
+    }
+
+    let req = crate::net::Request { url, method, headers, body, response_type };
+    let port = ctx.state.cfg.port;
+    let out = tokio::task::spawn_blocking(move || crate::net::fetch(&req, port))
+        .await
+        .map_err(|e| err("io", e.to_string()))?;
+    out.map_err(|(code, message)| RpcErr { code, message })
 }
 
 async fn folder_pick(ctx: &Ctx, params: &Value) -> R {
@@ -795,6 +900,75 @@ fn hw_info() -> Value {
             "removable": d.is_removable(),
         })).collect::<Vec<_>>(),
     })
+}
+
+// --------------------------------------------------------------- app metadata
+
+fn meta_json(m: &system::AppMeta, want_icon: bool) -> Value {
+    let icon = if want_icon {
+        m.icon_png.as_ref().map(|bytes| {
+            json!({"mime": "image/png",
+                   "data": base64::engine::general_purpose::STANDARD.encode(bytes)})
+        })
+    } else {
+        None
+    };
+    json!({
+        "path": m.path,
+        "name": m.name,
+        "file_name": m.file_name,
+        "size": m.size,
+        "modified": m.modified,
+        "version": m.version,
+        "publisher": m.publisher,
+        "description": m.description,
+        "icon": icon,
+    })
+}
+
+/// The apps this origin may launch without asking: the global allow-list plus
+/// anything it has been granted. Each entry carries a cheap display name (no
+/// icon — call `app.info` for the full metadata and icon of one app).
+fn app_list(ctx: &Ctx) -> R {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut paths: Vec<String> = Vec::new();
+    for p in &ctx.state.cfg.launch_allow {
+        let s = p.to_string_lossy().into_owned();
+        if seen.insert(s.to_ascii_lowercase()) {
+            paths.push(s);
+        }
+    }
+    for s in &ctx.grant.launch_allow {
+        if seen.insert(s.to_ascii_lowercase()) {
+            paths.push(s.clone());
+        }
+    }
+    let apps: Vec<Value> = paths
+        .iter()
+        .map(|p| {
+            let m = system::basic_meta(Path::new(p));
+            json!({"path": m.path, "name": m.name, "file_name": m.file_name, "size": m.size})
+        })
+        .collect();
+    // `allowed` (bare strings) is kept for backward compatibility.
+    Ok(json!({"allowed": paths, "apps": apps}))
+}
+
+/// Full metadata for one executable, including its icon as a base64 PNG. Reads
+/// only — never launches. Pass `icon:false` to skip the icon bytes.
+async fn app_info(_ctx: &Ctx, params: &Value) -> R {
+    let raw = s(params, "path")?;
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(err("bad_path", "path must be absolute"));
+    }
+    let want_icon = params.get("icon").and_then(Value::as_bool).unwrap_or(true);
+    let real = path.canonicalize().map_err(|e| err("not_found", format!("{raw}: {e}")))?;
+    if !real.is_file() {
+        return Err(err("not_found", "not a file"));
+    }
+    let meta = blocking(move || Ok(system::app_meta(&real))).await?;
+    Ok(meta_json(&meta, want_icon))
 }
 
 // -------------------------------------------------------------------- launch
