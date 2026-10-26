@@ -19,7 +19,7 @@ let app = NSApplication.shared
 let delegate = AppDelegate(
     pipe: pipe,
     key: argument("--key") ?? "",
-    dark: argument("--theme") == "dark"
+    theme: argument("--theme") ?? "system"
 )
 app.delegate = delegate
 // A helper GUI: no Dock icon, but it can still show and focus windows.

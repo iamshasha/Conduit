@@ -23,6 +23,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 install -m755 "$CORE" "$APP/Contents/MacOS/conduit"
 install -m755 "$GUI"  "$APP/Contents/MacOS/conduit-gui"
+# The GUI's strings live in SwiftPM's resource bundle beside the binary; without
+# it every label shows as its key.
+RES="$(dirname "$GUI")/ConduitGUI_ConduitGUI.bundle"
+[ -d "$RES" ] || { echo "missing $RES" >&2; exit 1; }
+cp -R "$RES" "$APP/Contents/Resources/"
 sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
 
 # App icon: render the SVG to an iconset and compile with iconutil.
