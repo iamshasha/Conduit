@@ -115,18 +115,18 @@ final class AppModel: ObservableObject {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let pipe: String
     private let key: String
-    private let dark: Bool
+    private let theme: String
     private let bus = Bus()
     private var model: AppModel!
     private var dashboard: NSWindow?
     private var consent: ConsentController?
 
-    init(pipe: String, key: String, dark: Bool) {
-        self.pipe = pipe; self.key = key; self.dark = dark
+    init(pipe: String, key: String, theme: String) {
+        self.pipe = pipe; self.key = key; self.theme = theme
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if dark { NSApp.appearance = NSAppearance(named: .darkAqua) }
+        applyTheme(theme)
         model = AppModel(bus: bus)
         bus.onMessage = { [weak self] msg in self?.dispatch(msg) }
         bus.onClose = { NSApp.terminate(nil) } // core went away
@@ -160,9 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case "ai_storage":
             model.aiStorage = data
         case "settings":
-            if let theme = data["theme"].string {
-                NSApp.appearance = NSAppearance(named: theme == "dark" ? .darkAqua : .aqua)
-            }
+            if let theme = data["theme"].string { applyTheme(theme) }
         case "consent_add":
             consentController().add(data)
         case "consents":
@@ -171,6 +169,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             consent?.remove(UInt64(data.int64 ?? 0))
         default:
             break
+        }
+    }
+
+    /// "system" (or anything unknown) follows macOS; only light/dark pin it.
+    private func applyTheme(_ theme: String) {
+        switch theme {
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        default: NSApp.appearance = nil
         }
     }
 

@@ -14,6 +14,10 @@ final class Bus {
     func connect(path: String, key: String) -> Bool {
         fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
+        // A write after the core exits must fail with EPIPE, not kill us with
+        // SIGPIPE before the reader notices the close.
+        var one: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)

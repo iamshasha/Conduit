@@ -128,7 +128,6 @@ private struct HelpPage: View {
 
 private struct OverviewPage: View {
     @EnvironmentObject var model: AppModel
-    private let tick = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         let snap = model.snapshot
@@ -163,8 +162,15 @@ private struct OverviewPage: View {
                 }
             }
         }
-        .onReceive(tick) { _ in model.cmd("stats") }
-        .onAppear { model.cmd("stats") }
+        // A timer stored on the view struct is rebuilt (and restarted) every
+        // time a model change re-creates the page; a task lives as long as the
+        // page is on screen.
+        .task {
+            while !Task.isCancelled {
+                model.cmd("stats")
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            }
+        }
     }
 
     private func statMem(_ s: JSON) -> String {
@@ -314,7 +320,7 @@ private struct ActivityPage: View {
                         Text(r["method"].string ?? "").font(.system(.body, design: .monospaced))
                         Text(Fmt.host(r["origin"].string ?? "")).foregroundStyle(.secondary)
                         Spacer()
-                        Text(r["ok"].boolValue ? Loc.t("ok") : (r["code"].string ?? Loc.t("failed")))
+                        Text(r["ok"].boolValue ? Loc.t("ok") : (r["code"].string.flatMap { $0.isEmpty ? nil : $0 } ?? Loc.t("failed")))
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 4)
@@ -416,13 +422,18 @@ private struct AiPage: View {
                 endpoint = model.snapshot["settings"]["ai_endpoint"].string ?? ""
                 didInit = true
             }
+            // The model list outlives this page, so a revisit gets no onChange
+            // for it; pick from what is already loaded.
+            syncSelection(models)
             model.cmd("ai_status")
             model.cmd("ai_probe")
         }
-        .onChange(of: models) { newModels in
-            if selected.isEmpty || !newModels.contains(selected) {
-                selected = newModels.first ?? ""
-            }
+        .onChange(of: models) { syncSelection($0) }
+    }
+
+    private func syncSelection(_ models: [String]) {
+        if selected.isEmpty || !models.contains(selected) {
+            selected = models.first ?? ""
         }
     }
 
@@ -482,9 +493,9 @@ private struct SettingsPage: View {
             }
             Card {
                 HStack {
-                    Text(Loc.t("nav_settings"))
+                    Text(Loc.t("storage"))
                     Spacer()
-                    Button(Loc.t("open_sandbox")) { model.cmd("open_data") }
+                    Button(Loc.t("open_data")) { model.cmd("open_data") }
                 }
             }
             aiStorageCard
